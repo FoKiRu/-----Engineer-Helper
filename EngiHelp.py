@@ -1,14 +1,14 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 import os
 import re
 import shutil
 import traceback
 from collections import Counter
 
-SCRIPT_VERSION = "v0.1.2"
+SCRIPT_VERSION = "v0.1.6"
 AUTHOR = "Автор: Кирилл Рутенко"
-DESCRIPTION = "Описание: Скрипт для изменения параметров UseDBSync и USESQL."
+DESCRIPTION = "Описание: Скрипт для изменения параметров UseDBSync и UseSQL."
 
 FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI"]
 INI_FILE_USESQL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rk7srv.INI")
@@ -41,7 +41,7 @@ def get_usedbsync_values():
 def detect_consensus_value():
     values = get_usedbsync_values()
     if not values:
-        return ""
+        return "0"
     counts = Counter(values.values())
     consensus = counts.most_common(1)[0][0]
     for filename, value in values.items():
@@ -53,7 +53,7 @@ def detect_consensus_value():
 
 def get_usesql_value():
     if not os.path.isfile(INI_FILE_USESQL):
-        return ""
+        return "0"
     try:
         try:
             with open(INI_FILE_USESQL, 'r', encoding='utf-8') as file:
@@ -67,7 +67,7 @@ def get_usesql_value():
                 return match.group(1)
     except Exception:
         pass
-    return ""
+    return "0"
 
 
 def update_ini_file(filepath, value, key):
@@ -113,7 +113,19 @@ def on_check():
     if missing:
         messagebox.showwarning("Внимание", f"Файлы не найдены: {', '.join(missing)}")
     else:
+        # Обновление значения чекбоксов
+        usedbsync_var.set(int(detect_consensus_value()))
+        usesql_var.set(int(get_usesql_value()))
         messagebox.showinfo("Успех", "Все необходимые файлы найдены.")
+
+def toggle_usedbsync():
+    value = "1" if usedbsync_var.get() else "0"
+    run_update(value)
+
+
+def toggle_usesql():
+    value = "1" if usesql_var.get() else "0"
+    run_update_usesql_value(value)
 
 
 def run_update(value):
@@ -126,79 +138,60 @@ def run_update(value):
             failed.append(filename)
     if failed:
         messagebox.showwarning("Внимание", f"Не удалось обновить: {', '.join(failed)}")
-    else:
-        messagebox.showinfo("Успех", "Параметр UseDBSync успешно обновлён во всех файлах.")
 
 
-def run_update_usesql():
-    value = usesql_var.get()
-    if value not in ("0", "1"):
-        messagebox.showerror("Ошибка", "Введите 0 или 1 для USESQL")
-        return
-    success = update_ini_file(INI_FILE_USESQL, value, "USESQL")
-    if success:
-        messagebox.showinfo("Успех", "Параметр USESQL обновлён в rk7srv.INI")
-    else:
-        messagebox.showwarning("Ошибка", "Не удалось обновить USESQL в rk7srv.INI")
-
-
-def on_submit():
-    value = value_var.get()
-    if value not in ("0", "1"):
-        messagebox.showerror("Ошибка", "Введите 0 или 1")
-    else:
-        run_update(value)
+def run_update_usesql_value(value):
+    success = update_ini_file(INI_FILE_USESQL, value, "UseSQL")
+    if not success:
+        messagebox.showwarning("Ошибка", "Не удалось обновить UseSQL в rk7srv.INI")
+        
 
 
 # GUI
 root = tk.Tk()
-root.title("UseDBSync Configurator")
-root.geometry("600x320")
+root.title("EngiHelp")
+root.geometry("400x240")  # уменьшенное окно
 
 # Центрирование окна по курсору
 screen_width = root.winfo_screenwidth()
 screen_height = root.winfo_screenheight()
 cursor_x = root.winfo_pointerx()
 cursor_y = root.winfo_pointery()
-window_width = 600
-window_height = 320
+window_width = 400
+window_height = 240
 x = cursor_x - window_width // 2
 y = cursor_y - window_height // 2
 x = max(0, min(screen_width - window_width, x))
 y = max(0, min(screen_height - window_height, y))
 root.geometry(f"{window_width}x{window_height}+{x}+{y}")
 
-main_frame = tk.Frame(root)
-main_frame.pack(pady=10, padx=10, fill="both", expand=True)
+notebook = ttk.Notebook(root)
+notebook.pack(fill="both", expand=True)
 
-left_frame = tk.Frame(main_frame)
-left_frame.pack(side="left", expand=True, anchor="n")
+# Вкладка 1 — Настройки
+settings_tab = tk.Frame(notebook)
+notebook.add(settings_tab, text="Параметры")
 
-right_frame = tk.Frame(main_frame)
-right_frame.pack(side="right", expand=True, anchor="n")
+usedbsync_var = tk.IntVar(value=int(detect_consensus_value()))
+usesql_var = tk.IntVar(value=int(get_usesql_value()))
 
-# Левая колонка (UseDBSync)
-current_value = detect_consensus_value()
-value_var = tk.StringVar(value=current_value)
-tk.Label(left_frame, text="Введите 0 или 1 для UseDBSync:").pack()
-tk.Entry(left_frame, textvariable=value_var, width=5, justify="center").pack(pady=5)
-tk.Button(left_frame, text="Применить UseDBSync", command=on_submit).pack(pady=5)
+cb1 = tk.Checkbutton(settings_tab, variable=usedbsync_var, text="UseDBSync", command=toggle_usedbsync, anchor="w", width=20, justify="left")
+cb1.pack(padx=10, pady=(20, 5), anchor="w")
 
-# Правая колонка (USESQL)
-current_usesql = get_usesql_value()
-usesql_var = tk.StringVar(value=current_usesql)
-tk.Label(right_frame, text="Введите 0 или 1 для USESQL:").pack()
-tk.Entry(right_frame, textvariable=usesql_var, width=5, justify="center").pack(pady=5)
-tk.Button(right_frame, text="Применить USESQL", command=run_update_usesql).pack(pady=5)
+cb2 = tk.Checkbutton(settings_tab, variable=usesql_var, text="UseSQL", command=toggle_usesql, anchor="w", width=20, justify="left")
+cb2.pack(padx=10, pady=(0, 10), anchor="w")
 
-# Нижняя панель с информацией и проверкой
-bottom_frame = tk.Frame(root)
-bottom_frame.pack(fill="x", side="bottom", padx=10, pady=5)
+check_btn = tk.Button(settings_tab, text="Проверить файлы", command=on_check, justify="left", anchor="nw")
+check_btn.pack(padx=10, pady=10, anchor="nw", expand=True)
 
-check_btn = tk.Button(bottom_frame, text="Проверить наличие файлов", command=on_check)
-check_btn.pack(side="left")
+# Вкладка 2 — Информация
+info_tab = tk.Frame(notebook)
+notebook.add(info_tab, text="О программе")
 
-info_label = tk.Label(bottom_frame, text=f"{DESCRIPTION}\n{AUTHOR}\n{SCRIPT_VERSION}", justify="left")
-info_label.pack(side="right")
+info_label = tk.Label(info_tab, text=f"{DESCRIPTION}\n{AUTHOR}\n{SCRIPT_VERSION}", justify="left", anchor="nw")
+info_label.pack(padx=10, pady=10, anchor="nw", fill="both", expand=True)
+
+# Обновление переноса текста при изменении размера
+info_label.bind('<Configure>', lambda e: info_label.config(wraplength=e.width - 20))
 
 root.mainloop()
