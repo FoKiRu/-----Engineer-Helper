@@ -120,8 +120,12 @@ def check_files():
 def on_check():
     found, missing = check_files()
     if missing:
+        usedbsync_cb.config(state="disabled", fg="gray")
+        usesql_cb.config(state="disabled", fg="gray")
         messagebox.showwarning("Внимание", f"Файлы не найдены: {', '.join(missing)}")
     else:
+        usedbsync_cb.config(state="normal", fg="black")
+        usesql_cb.config(state="normal", fg="black")
         usedbsync_var.set(int(detect_consensus_value()))
         usesql_var.set(int(get_usesql_value()))
         messagebox.showinfo("Успех", "Все необходимые файлы найдены.")
@@ -197,8 +201,11 @@ tk.Button(settings_tab, text="Сохранить путь", command=apply_path).
 usedbsync_var = tk.IntVar(value=int(detect_consensus_value()))
 usesql_var = tk.IntVar(value=int(get_usesql_value()))
 
-tk.Checkbutton(settings_tab, variable=usedbsync_var, text="UseDBSync", command=toggle_usedbsync, anchor="w").pack(padx=10, anchor="w")
-tk.Checkbutton(settings_tab, variable=usesql_var, text="UseSQL", command=toggle_usesql, anchor="w").pack(padx=10, anchor="w")
+usedbsync_cb = tk.Checkbutton(settings_tab, variable=usedbsync_var, text="UseDBSync", command=toggle_usedbsync, anchor="w", width=20, justify='left')
+usedbsync_cb.pack(padx=10, pady=(0, 5), anchor='w')
+
+usesql_cb = tk.Checkbutton(settings_tab, variable=usesql_var, text="UseSQL", command=toggle_usesql, anchor="w", width=20, justify='left')
+usesql_cb.pack(padx=10, pady=(0, 5), anchor='w')
 
 tk.Button(settings_tab, text="Проверить файлы", command=on_check).pack(padx=10, pady=10, anchor="w")
 
