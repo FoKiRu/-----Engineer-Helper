@@ -8,7 +8,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-SCRIPT_VERSION = "v0.1.9"
+SCRIPT_VERSION = "v0.1.10"
 AUTHOR = "Автор: Кирилл Рутенко"
 DESCRIPTION = "Описание: Скрипт для изменения параметров UseDBSync и UseSQL."
 CONFIG_FILE = "config.json"
@@ -233,6 +233,24 @@ def apply_path():
     on_check()
 
 tk.Button(settings_tab, text="Сохранить путь", command=apply_path).pack(padx=10, pady=(5, 10), anchor="w")
+
+def show_product_folders():
+    product_root = find_product_root(path_var.get())
+    if not product_root:
+        messagebox.showwarning("Ошибка", "Корневая папка продукта не определенна.")
+        return
+    
+    try:
+        items= os.listdir(product_root)
+        folders = [name for name in items if os.path.isdir(os.path.join(product_root, name))]
+        if folders:
+            messagebox.showinfo("Папки в корне продукта", "\n".join(folders))
+        else:
+            messagebox.showinfo("Папки в корне продукта", "Папки не найдены.")
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось получить список папок:\n{e}")
+
+tk.Button(settings_tab, text="Показать папки продукта", command=show_product_folders).pack(padx=10, pady=(0, 10), anchor="w")
 
 # Переключатели
 usedbsync_var = tk.IntVar(value=int(detect_consensus_value()))
