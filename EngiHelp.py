@@ -7,7 +7,7 @@ import traceback
 import json
 from collections import Counter
 
-SCRIPT_VERSION = "v0.1.7"
+SCRIPT_VERSION = "v0.1.8"
 AUTHOR = "Автор: Кирилл Рутенко"
 DESCRIPTION = "Описание: Скрипт для изменения параметров UseDBSync и UseSQL."
 CONFIG_FILE = "config.json"
@@ -122,13 +122,13 @@ def on_check():
     if missing:
         usedbsync_cb.config(state="disabled", fg="gray")
         usesql_cb.config(state="disabled", fg="gray")
-        messagebox.showwarning("Внимание", f"Файлы не найдены: {', '.join(missing)}")
+        return False
     else:
         usedbsync_cb.config(state="normal", fg="black")
         usesql_cb.config(state="normal", fg="black")
         usedbsync_var.set(int(detect_consensus_value()))
         usesql_var.set(int(get_usesql_value()))
-        messagebox.showinfo("Успех", "Все необходимые файлы найдены.")
+        return True
 
 def toggle_usedbsync():
     value = "1" if usedbsync_var.get() else "0"
@@ -207,7 +207,41 @@ usedbsync_cb.pack(padx=10, pady=(0, 5), anchor='w')
 usesql_cb = tk.Checkbutton(settings_tab, variable=usesql_var, text="UseSQL", command=toggle_usesql, anchor="w", width=20, justify='left')
 usesql_cb.pack(padx=10, pady=(0, 5), anchor='w')
 
-tk.Button(settings_tab, text="Проверить файлы", command=on_check).pack(padx=10, pady=10, anchor="w")
+# Подсказка при наведении на кнопку "Проверить файлы"
+def create_tooltip(widget, text):
+    tooltip = None
+
+    def on_enter(event):
+        nonlocal tooltip
+        x = widget.winfo_rootx() + widget.winfo_width() + 10
+        y = widget.winfo_rooty()
+        tooltip = tk.Toplevel(widget)
+        tooltip.overrideredirect(True)
+        tooltip.geometry(f"+{x}+{y}")
+        label = tk.Label(tooltip, text=text, bg="lightyellow", relief="solid", borderwidth=1, justify="left", padx=5, pady=3)
+        label.pack()
+
+    def on_leave(event):
+        nonlocal tooltip
+        if tooltip:
+            tooltip.destroy()
+            tooltip = None
+
+    widget.bind("<Enter>", on_enter)
+    widget.bind("<Leave>", on_leave)
+
+def on_check_with_message():
+    result = on_check()
+    if result:
+        messagebox.showinfo("Успех", "Все необходимые файлы найдены.")
+    else:
+        messagebox.showwarning("Внимание", f"Файлы не найдены: {', '.join(check_files()[1])}")
+
+
+check_btn = tk.Button(settings_tab, text="Проверить файлы", command=on_check_with_message)
+check_btn.pack(padx=10, pady=10, anchor="w")
+create_tooltip(check_btn, "Проверка наличия INI-файлов и обновление состояния параметров.")
+
 
 # Info tab
 info_tab = tk.Frame(notebook)
@@ -216,4 +250,5 @@ info_label = tk.Label(info_tab, text=f"{DESCRIPTION}\n{AUTHOR}\n{SCRIPT_VERSION}
 info_label.pack(padx=10, pady=10, anchor="nw", fill="both", expand=True)
 info_label.bind('<Configure>', lambda e: info_label.config(wraplength=e.width - 20))
 
+on_check()
 root.mainloop()
