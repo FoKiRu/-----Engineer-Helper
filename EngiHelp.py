@@ -6,8 +6,9 @@ import shutil
 import traceback
 import json
 from collections import Counter
+from pathlib import Path
 
-SCRIPT_VERSION = "v0.1.8"
+SCRIPT_VERSION = "v0.1.9"
 AUTHOR = "Автор: Кирилл Рутенко"
 DESCRIPTION = "Описание: Скрипт для изменения параметров UseDBSync и UseSQL."
 CONFIG_FILE = "config.json"
@@ -29,6 +30,35 @@ INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
 def save_config(path):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump({"ini_dir": path}, f, indent=4, ensure_ascii=False)
+
+def find_product_root(selected_path):
+    """
+    Определяет корневую папку продукта (например INST0.00.0.0000)
+    и проверяет наличие INI-файлов в bin/win.
+    Возвращает путь к корню продукта или None.
+    """
+    original = selected_path
+
+    # Если выбран bin/win — поднимаемся на два уровня
+    if os.path.basename(original).lower() == "win":
+        parent = os.path.dirname(original)
+        if os.path.basename(parent).lower() == "bin":
+            root = os.path.dirname(parent)
+        else:
+            return None
+    # Если выбран bin — поднимаемся на один уровень
+    elif os.path.basename(original).lower() == "bin":
+        root = os.path.dirname(original)
+    # Если сразу INST7... — проверим, есть ли bin/win
+    else:
+        root = original
+
+    bin_win = os.path.join(root, "bin", "win")
+    if all(os.path.isfile(os.path.join(bin_win, f)) for f in FILES):
+        return root
+
+    return None
+
 
 def get_usedbsync_values():
     values = {}
@@ -184,7 +214,14 @@ path_entry.pack(side="left", fill="x", expand=True)
 def browse_path():
     selected = filedialog.askdirectory()
     if selected:
-        path_var.set(selected)
+        product_root = find_product_root(selected)
+        if product_root:
+            bin_win_path = os.path.join(product_root, "bin", "win")
+            path_var.set(bin_win_path)
+            apply_path()
+        else:
+            messagebox.showerror("Ошибка", "Выбран некорректный путь.\nТребуется папка, содержащая bin/win с INI-файлами.")
+
 
 tk.Button(path_frame, text="Обзор", command=browse_path).pack(side="left", padx=5)
 
