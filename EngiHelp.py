@@ -224,7 +224,6 @@ settings_tab = tk.Frame(notebook)
 notebook.add(settings_tab, text="Параметры")
 
 # Выбор пути
-# Выбор пути
 path_frame = tk.Frame(settings_tab)
 path_frame.pack(fill="x", padx=10, pady=(10, 0))
 tk.Label(path_frame, text="Путь к INI-файлам:").pack(anchor="w")
@@ -246,17 +245,17 @@ def browse_path():
         else:
             messagebox.showerror("Ошибка", "Выбран некорректный путь.\nТребуется папка, содержащая bin/win с INI-файлами.")
 
-
 tk.Button(path_frame, text="Обзор", command=browse_path).pack(side="left", padx=5)
 
-def apply_path():
+def apply_path(event=None):
     global ini_path, INI_FILE_USESQL
     ini_path = path_var.get()
     INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
     save_config_path(ini_path)
     on_check()
 
-tk.Button(settings_tab, text="Сохранить путь", command=apply_path).pack(padx=10, pady=(5, 10), anchor="w")
+path_entry.bind("<<ComboboxSelected>>", apply_path) # Обновление после выбора пути из списка
+#tk.Button(settings_tab, text="Сохранить путь", command=apply_path).pack(padx=10, pady=(5, 10), anchor="w")
 
 def show_product_folders():
     product_root = find_product_root(path_var.get())
