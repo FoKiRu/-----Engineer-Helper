@@ -9,31 +9,47 @@ from collections import Counter
 from pathlib import Path
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.1.11"
+SCRIPT_VERSION = "v0.1.12"
 AUTHOR = "Автор: Кирилл Рутенко"
 DESCRIPTION = "Описание: Скрипт для изменения параметров UseDBSync и UseSQL."
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
-CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json") # путь к config.json
+CONFIG_FILE = "config.json"
+
+
+# =================== Работа с config.json (мульти-пути) =============
+def load_config_paths():
+    if not os.path.exists(CONFIG_FILE):
+        return []
+
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        try:
+            config = json.load(f)
+        except json.JSONDecodeError:
+            return []
+
+    return [v for k, v in sorted(config.items()) if k.startswith("ini_dir")]
+
+"""
+print("📁 Текущая рабочая директория:", os.getcwd())
+print("📄 Ожидаемый путь к config.json:", os.path.abspath("config.json"))
+"""
+
+def save_config_path(new_path):
+    paths = load_config_paths()
+    if new_path in paths:
+        paths.remove(new_path)
+    paths.insert(0, new_path)
+    paths = paths[:3]
+
+    config = {f"ini_dir{i}": path for i, path in enumerate(paths)}
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4, ensure_ascii=False)
+
 FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI"]
 
-# ======================= Работа с config.json =======================
-default_config = {"ini_dir": ""}
-
-# если файла нет - создаем
-if not os.path.exists(CONFIG_FILE):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(default_config, f, indent=4, ensure_ascii=False)
-
-# считываем конфиг
-with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-    config = json.load(f)
-
-ini_path = config.get("ini_dir", "")
-INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
-
-def save_config(path):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump({"ini_dir": path}, f, indent=4, ensure_ascii=False)
+ini_paths = load_config_paths()
+ini_path = ini_paths[0] if ini_paths else ""
+INI_FILE_USESQL=os.path.join(ini_path, "rk7srv.INI")
 
 # ======================= Определение корня продукта =======================
 def find_product_root(selected_path):
@@ -208,11 +224,15 @@ settings_tab = tk.Frame(notebook)
 notebook.add(settings_tab, text="Параметры")
 
 # Выбор пути
+# Выбор пути
 path_frame = tk.Frame(settings_tab)
 path_frame.pack(fill="x", padx=10, pady=(10, 0))
 tk.Label(path_frame, text="Путь к INI-файлам:").pack(anchor="w")
-path_var = tk.StringVar(value=ini_path)
-path_entry = tk.Entry(path_frame, textvariable=path_var)
+path_var = tk.StringVar()
+ini_paths = load_config_paths()
+if ini_paths:
+    path_var.set(ini_paths[0])
+path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
 path_entry.pack(side="left", fill="x", expand=True)
 
 def browse_path():
@@ -233,7 +253,7 @@ def apply_path():
     global ini_path, INI_FILE_USESQL
     ini_path = path_var.get()
     INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
-    save_config(ini_path)
+    save_config_path(ini_path)
     on_check()
 
 tk.Button(settings_tab, text="Сохранить путь", command=apply_path).pack(padx=10, pady=(5, 10), anchor="w")
