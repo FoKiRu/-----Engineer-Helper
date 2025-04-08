@@ -8,19 +8,23 @@ import json
 from collections import Counter
 from pathlib import Path
 
-SCRIPT_VERSION = "v0.1.10"
+# ======================= Константы и настройки =======================
+SCRIPT_VERSION = "v0.1.11"
 AUTHOR = "Автор: Кирилл Рутенко"
 DESCRIPTION = "Описание: Скрипт для изменения параметров UseDBSync и UseSQL."
-CONFIG_FILE = "config.json"
-
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
+CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json") # путь к config.json
 FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI"]
 
-# === Работа с config.json ===
+# ======================= Работа с config.json =======================
 default_config = {"ini_dir": ""}
+
+# если файла нет - создаем
 if not os.path.exists(CONFIG_FILE):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(default_config, f, indent=4, ensure_ascii=False)
 
+# считываем конфиг
 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
     config = json.load(f)
 
@@ -31,6 +35,7 @@ def save_config(path):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump({"ini_dir": path}, f, indent=4, ensure_ascii=False)
 
+# ======================= Определение корня продукта =======================
 def find_product_root(selected_path):
     """
     Определяет корневую папку продукта (например INST0.00.0.0000)
@@ -58,7 +63,6 @@ def find_product_root(selected_path):
         return root
 
     return None
-
 
 def get_usedbsync_values():
     values = {}
