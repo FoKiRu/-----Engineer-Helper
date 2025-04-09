@@ -8,9 +8,10 @@ import json
 from collections import Counter
 from pathlib import Path
 import psutil
+import subprocess
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.1.13"
+SCRIPT_VERSION = "v0.1.14"
 AUTHOR = "Автор: Кирилл Рутенко"
 DESCRIPTION = "Описание: Скрипт для изменения параметров UseDBSync и UseSQL."
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
@@ -276,6 +277,7 @@ def show_product_folders():
 
 tk.Button(settings_tab, text="Показать папки продукта", command=show_product_folders).pack(padx=10, pady=(0, 10), anchor="w")
 
+"""
 def is_process_running(process_name):
     for proc in psutil.process_iter(['name']):
         try:
@@ -290,8 +292,45 @@ def check_program_process():
         messagebox.showinfo("Проверка", "✅ Программа запущена.")
     else:
         messagebox.showwarning("Проверка", "❌ Программа не найдена.")
+"""
 
-tk.Button(settings_tab, text="Проверка процесса рефа", command=check_program_process).pack(padx=10, pady=(0, 10), anchor="w")
+
+def handle_refsrv_process():
+    exe_path = os.path.join(ini_path, "refsrv.exe")
+    if not os.path.isfile(exe_path):
+        messagebox.showerror("Ошибка", f"Файл не найден:\n{exe_path}")
+        return
+
+    for proc in psutil.process_iter(['name']):
+        if proc.info['name'] and proc.info['name'].lower() == "refsrv.exe":
+            answer = messagebox.askyesno("Процесс уже запущен", "refsrv.exe уже запущен.\nПерезапустить?")
+            if answer:
+                for p in psutil.process_iter(['pid', 'name']):
+                    if p.info['name'] and p.info['name'].lower() == "refsrv.exe":
+                        try:
+                            p.terminate()
+                        except Exception:
+                            pass
+                subprocess.Popen(f'start "" "{exe_path}" -desktop', shell=True)
+                # messagebox.showinfo("Готово", "refsrv.exe был перезапущен.")
+            return
+    subprocess.Popen(f'start "" "{exe_path}" -desktop', shell=True)
+    # messagebox.showinfo("Готово", "refsrv.exe был перезапущен.")
+
+def on_check_refsrv():
+    running = any(proc.info['name'].lower() == "refsrv.exe"
+                  for proc in psutil.process_iter(['name']) if proc.info['name'])
+    if running:
+        messagebox.showinfo("Состояние", "refsrv.exe запущен.")
+    else:
+        messagebox.showwarning("Состояние", "refsrv.exe не запущен.")
+
+
+proc_frame = tk.Frame(settings_tab)
+proc_frame.pack(padx=10, pady=(5, 10), anchor="w")
+
+tk.Button(proc_frame, text="Проверить процесс", command=on_check_refsrv).pack(side="left")
+tk.Button(proc_frame, text="Запустить refsrv.exe", command=handle_refsrv_process).pack(side="left", padx=5)
 
 # Переключатели
 usedbsync_var = tk.IntVar(value=int(detect_consensus_value()))
