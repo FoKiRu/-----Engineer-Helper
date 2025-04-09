@@ -7,9 +7,10 @@ import traceback
 import json
 from collections import Counter
 from pathlib import Path
+import psutil
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.1.12"
+SCRIPT_VERSION = "v0.1.13"
 AUTHOR = "Автор: Кирилл Рутенко"
 DESCRIPTION = "Описание: Скрипт для изменения параметров UseDBSync и UseSQL."
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
@@ -274,6 +275,23 @@ def show_product_folders():
         messagebox.showerror("Ошибка", f"Не удалось получить список папок:\n{e}")
 
 tk.Button(settings_tab, text="Показать папки продукта", command=show_product_folders).pack(padx=10, pady=(0, 10), anchor="w")
+
+def is_process_running(process_name):
+    for proc in psutil.process_iter(['name']):
+        try:
+            if proc.info['name'].lower() == process_name.lower():
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return False
+
+def check_program_process():
+    if is_process_running("refsrv.exe"):
+        messagebox.showinfo("Проверка", "✅ Программа запущена.")
+    else:
+        messagebox.showwarning("Проверка", "❌ Программа не найдена.")
+
+tk.Button(settings_tab, text="Проверка процесса рефа", command=check_program_process).pack(padx=10, pady=(0, 10), anchor="w")
 
 # Переключатели
 usedbsync_var = tk.IntVar(value=int(detect_consensus_value()))
