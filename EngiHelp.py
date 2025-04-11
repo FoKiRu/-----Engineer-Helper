@@ -1,3 +1,4 @@
+# ======================= Импорты =======================
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 import os
@@ -5,18 +6,22 @@ import re
 import shutil
 import traceback
 import json
-from collections import Counter
-from pathlib import Path
 import psutil
 import subprocess
+from pathlib import Path
+from collections import Counter
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.1.15"
+SCRIPT_VERSION = "v0.3.16"
 AUTHOR = "Автор: Кирилл Рутенко"
-DESCRIPTION = "Описание: Скрипт для изменения параметров UseDBSync и UseSQL."
+DESCRIPTION = (
+    "EngiHelp — инструмент для работы с INI-файлами R-Keeper:\n"
+    "управление UseDBSync/UseSQL, запуск процессов, мультиподдержка версий,\n"
+    "удобный выбор пути и конфигурация через config.json."
+)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
 CONFIG_FILE = "config.json"
-
+FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI"]
 
 # =================== Работа с config.json (мульти-пути) =============
 def load_config_paths():
@@ -47,13 +52,12 @@ def save_config_path(new_path):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=4, ensure_ascii=False)
 
-FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI"]
-
+# ======================= Определение путей и начальных переменных =======================
 ini_paths = load_config_paths()
 ini_path = ini_paths[0] if ini_paths else ""
 INI_FILE_USESQL=os.path.join(ini_path, "rk7srv.INI")
 
-# ======================= Определение корня продукта =======================
+# ======================= Логика определения корня продукта =======================
 def find_product_root(selected_path):
     """
     Определяет корневую папку продукта (например INST0.00.0.0000)
@@ -82,6 +86,7 @@ def find_product_root(selected_path):
 
     return None
 
+# ======================= Работа с INI-файлами =======================
 def get_usedbsync_values():
     values = {}
     for filename in FILES:
@@ -182,6 +187,7 @@ def on_check():
         usesql_var.set(int(get_usesql_value()))
         return True
 
+
 def toggle_usedbsync():
     value = "1" if usedbsync_var.get() else "0"
     run_update(value)
@@ -275,7 +281,7 @@ def show_product_folders():
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось получить список папок:\n{e}")
 
-tk.Button(settings_tab, text="Показать папки продукта", command=show_product_folders).pack(padx=10, pady=(0, 10), anchor="w")
+tk.Button(settings_tab, text="Показать папки", command=show_product_folders).pack(padx=10, pady=(0, 10), anchor="w")
 
 """
 def is_process_running(process_name):
@@ -293,43 +299,102 @@ def check_program_process():
     else:
         messagebox.showwarning("Проверка", "❌ Программа не найдена.")
 """
-
-
-def run_or_restart_refsrv():
-    exe_path = os.path.join(ini_path, "refsrv.exe")
+# ======================= Запуск / рестарт Ref, Mid Srv =======================
+def run_or_restart_process(exe_name):
+    exe_path = os.path.join(ini_path, exe_name)
     if not os.path.isfile(exe_path):
         messagebox.showerror("Ошибка", f"Файл не найден:\n{exe_path}")
         return
 
-    # Завершить процес refsrv.exe
+    # ЗАвершение процесса
     for proc in psutil.process_iter(['pid', 'name']):
-        if proc.info['name'] and proc.info['name'].lower() == "refsrv.exe":
+        if proc.info['name'] and proc.info['name'].lower() == exe_name.lower():
             try:
                 proc.terminate()
             except Exception:
                 pass
 
-    #Рестрарт с параметром -desktop
+    #Рестарт с параметром -desktop
     try:
-        subprocess.Popen(f'start "" "{exe_path}" -desktop', shell=True)
-        # messagebox.showinfo("Готово", "refsrv.exe был перезапущен.")
+        subprocess.Popen(f'start \"\" \"{exe_path}\" -desktop', shell=True)
+    except Exception as e:
+        messagebox.showerror("Ошибка запуска", str(e))
+
+# ======================= Запуск rk7man.exe - аналог .bat =======================
+def run_rk7man():
+    preload_path = os.path.join(ini_path, "PRELOAD")
+    rk7man_ini = os.path.join(ini_path, "rk7man.ini")
+    rk7man_exe = os.path.join(ini_path, "rk7man.exe")
+    preload_exe = os.path.join(ini_path, "preload.exe")
+    rk7copy_exe = os.path.join(ini_path, "rk7copy.exe")
+
+    if not os.path.isfile(rk7man_exe):
+        messagebox.showerror("Ошибка", f"Файл rk7man.exe не найден в {ini_path}")
+        return
+
+    try:
+        # 1. preload.exe rk7man.ini
+        if os.path.isfile(preload_exe):
+            subprocess.run([preload_exe, rk7man_ini], cwd=ini_path, check=True)
+        else:
+            messagebox.showwarning("Предупреждение", "preload.exe не найден. Пропуск шага preload.")
+
+        # 2. Удаление *.bak
+        for dll in Path(preload_path).glob("*.dll"):
+            bak_file = Path(ini_path) / (dll.stem + ".bak")
+            if bak_file.exists():
+                try:
+                    bak_file.unlink()
+                except Exception as e:
+                    print(f"Не удалось удалить {bak_file}: {e}")
+
+        # 3. Переименование *.dll в *.bak
+        for dll in Path(preload_path).glob("*.dll"):
+            dest = Path(ini_path) / (dll.stem + ".bak")
+            try:
+                shutil.move(dll, dest)
+            except Exception as e:
+                print(f"Не удалось переименовать {dll}: {e}")
+
+        # 4. Копирование из PRELOAD
+        if os.path.isfile(rk7copy_exe):
+            subprocess.run([rk7copy_exe, preload_path, ".", "/S", "/C"], cwd=ini_path, check=True)
+        else:
+            # Альтернатива: xcopy /S /C /R /Y
+            for item in Path(preload_path).rglob("*"):
+                target = Path(ini_path) / item.relative_to(preload_path)
+                if item.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    shutil.copy2(item, target)
+
+        # 5. Удаление папки PRELOAD
+        shutil.rmtree(preload_path, ignore_errors=True)
+
+        # 6. Запуск rk7man.exe rk7man.ini
+        subprocess.Popen([rk7man_exe, rk7man_ini], cwd=ini_path)
     except Exception as e:
         messagebox.showerror("Ошибка запуска", str(e))
 
 proc_frame = tk.Frame(settings_tab)
 proc_frame.pack(padx=10, pady=(5, 10), anchor="w")
 
-tk.Button(proc_frame, text="Запустить refsrv.exe", command=run_or_restart_refsrv).pack(side="left")
+# ======================= Кнопки управления =======================
+tk.Button(proc_frame, text="Запустить refsrv.exe", command=lambda: run_or_restart_process("refsrv.exe")).pack(side="left")
+tk.Button(proc_frame, text="Запустить midserv.exe", command=lambda: run_or_restart_process("midserv.exe")).pack(side="left", padx=5)
+tk.Button(proc_frame, text="Запустить rk7man.exe", command=run_rk7man).pack(side="left", padx=5)
+
+
 
 # Переключатели
-usedbsync_var = tk.IntVar(value=int(detect_consensus_value()))
 usesql_var = tk.IntVar(value=int(get_usesql_value()))
-
-usedbsync_cb = tk.Checkbutton(settings_tab, variable=usedbsync_var, text="UseDBSync", command=toggle_usedbsync, anchor="w", width=20, justify='left')
-usedbsync_cb.pack(padx=10, pady=(0, 5), anchor='w')
+usedbsync_var = tk.IntVar(value=int(detect_consensus_value()))
 
 usesql_cb = tk.Checkbutton(settings_tab, variable=usesql_var, text="UseSQL", command=toggle_usesql, anchor="w", width=20, justify='left')
 usesql_cb.pack(padx=10, pady=(0, 5), anchor='w')
+
+usedbsync_cb = tk.Checkbutton(settings_tab, variable=usedbsync_var, text="UseDBSync", command=toggle_usedbsync, anchor="w", width=20, justify='left')
+usedbsync_cb.pack(padx=10, pady=(0, 5), anchor='w')
 
 # Подсказка при наведении на кнопку "Проверить файлы"
 def create_tooltip(widget, text):
