@@ -10,9 +10,12 @@ import psutil
 import subprocess
 from pathlib import Path
 from collections import Counter
+import os
+from tkinter import messagebox
+import time
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.3.16"
+SCRIPT_VERSION = "v0.3.17"
 AUTHOR = "Автор: Кирилл Рутенко"
 DESCRIPTION = (
     "EngiHelp — инструмент для работы с INI-файлами R-Keeper:\n"
@@ -214,7 +217,7 @@ def run_update_usesql_value(value):
 # === GUI ===
 root = tk.Tk()
 root.title("EngiHelp")
-root.geometry("460x280")
+root.geometry("460x300")
 
 # Центрирование окна
 screen_width = root.winfo_screenwidth()
@@ -222,8 +225,8 @@ screen_height = root.winfo_screenheight()
 cursor_x = root.winfo_pointerx()
 cursor_y = root.winfo_pointery()
 x = max(0, min(screen_width - 460, cursor_x - 230))
-y = max(0, min(screen_height - 280, cursor_y - 140))
-root.geometry(f"460x280+{x}+{y}")
+y = max(0, min(screen_height - 300, cursor_y - 140))
+root.geometry(f"460x300+{x}+{y}")
 
 notebook = ttk.Notebook(root)
 notebook.pack(fill="both", expand=True)
@@ -320,69 +323,54 @@ def run_or_restart_process(exe_name):
     except Exception as e:
         messagebox.showerror("Ошибка запуска", str(e))
 
-# ======================= Запуск rk7man.exe - аналог .bat =======================
+# ======================= Запуск rk7man.bat =======================
 def run_rk7man():
-    preload_path = os.path.join(ini_path, "PRELOAD")
-    rk7man_ini = os.path.join(ini_path, "rk7man.ini")
-    rk7man_exe = os.path.join(ini_path, "rk7man.exe")
-    preload_exe = os.path.join(ini_path, "preload.exe")
-    rk7copy_exe = os.path.join(ini_path, "rk7copy.exe")
-
-    if not os.path.isfile(rk7man_exe):
-        messagebox.showerror("Ошибка", f"Файл rk7man.exe не найден в {ini_path}")
-        return
-
-    try:
-        # 1. preload.exe rk7man.ini
-        if os.path.isfile(preload_exe):
-            subprocess.run([preload_exe, rk7man_ini], cwd=ini_path, check=True)
-        else:
-            messagebox.showwarning("Предупреждение", "preload.exe не найден. Пропуск шага preload.")
-
-        # 2. Удаление *.bak
-        for dll in Path(preload_path).glob("*.dll"):
-            bak_file = Path(ini_path) / (dll.stem + ".bak")
-            if bak_file.exists():
-                try:
-                    bak_file.unlink()
-                except Exception as e:
-                    print(f"Не удалось удалить {bak_file}: {e}")
-
-        # 3. Переименование *.dll в *.bak
-        for dll in Path(preload_path).glob("*.dll"):
-            dest = Path(ini_path) / (dll.stem + ".bak")
+    for proc in psutil.process_iter(['pid', 'name']):
+        if proc.info['name'] and proc.info['name'].lower() == "rk7man.exe":
             try:
-                shutil.move(dll, dest)
-            except Exception as e:
-                print(f"Не удалось переименовать {dll}: {e}")
+                proc.terminate()
+            except Exception:
+                pass
 
-        # 4. Копирование из PRELOAD
-        if os.path.isfile(rk7copy_exe):
-            subprocess.run([rk7copy_exe, preload_path, ".", "/S", "/C"], cwd=ini_path, check=True)
-        else:
-            # Альтернатива: xcopy /S /C /R /Y
-            for item in Path(preload_path).rglob("*"):
-                target = Path(ini_path) / item.relative_to(preload_path)
-                if item.is_dir():
-                    target.mkdir(parents=True, exist_ok=True)
-                else:
-                    shutil.copy2(item, target)
+    time.sleep(1.5)
 
-        # 5. Удаление папки PRELOAD
-        shutil.rmtree(preload_path, ignore_errors=True)
-
-        # 6. Запуск rk7man.exe rk7man.ini
-        subprocess.Popen([rk7man_exe, rk7man_ini], cwd=ini_path)
+    bat_path = os.path.join(ini_path, "rk7man.bat")
+    if not os.path.isfile(bat_path):
+        messagebox.showerror("Ошибка", f"Файл не найден:\n{bat_path}")
+        return
+    try:
+        os.startfile(bat_path)
     except Exception as e:
         messagebox.showerror("Ошибка запуска", str(e))
 
-proc_frame = tk.Frame(settings_tab)
-proc_frame.pack(padx=10, pady=(5, 10), anchor="w")
+# ======================= Запуск wincash.bat =======================
+def run_wincash_bat():
+    bat_path = os.path.join(ini_path, "wincash.bat")
+    if not os.path.isfile(bat_path):
+        messagebox.showerror("Ошибка", f"Файл не найден:\n{bat_path}")
+        return
+    try:
+        os.startfile(bat_path)
+    except Exception as e:
+        messagebox.showerror("Ошибка запуска", str(e))
 
-# ======================= Кнопки управления =======================
-tk.Button(proc_frame, text="Запустить refsrv.exe", command=lambda: run_or_restart_process("refsrv.exe")).pack(side="left")
-tk.Button(proc_frame, text="Запустить midserv.exe", command=lambda: run_or_restart_process("midserv.exe")).pack(side="left", padx=5)
-tk.Button(proc_frame, text="Запустить rk7man.exe", command=run_rk7man).pack(side="left", padx=5)
+
+# ======================= Блок запуска процессов =======================
+launch_frame = tk.LabelFrame(settings_tab, text="Запуск")
+launch_frame.pack(padx=10, pady=(10, 10), anchor="w", fill="x")
+
+proc_frame_top = tk.Frame(launch_frame)
+proc_frame_top.pack(anchor="w", padx=5, pady=(5, 0))
+
+tk.Button(proc_frame_top, text="Refsrv", command=lambda: run_or_restart_process("refsrv.exe")).pack(side="left", padx=(0, 5))
+tk.Button(proc_frame_top, text="RK7man", command=run_rk7man).pack(side="left")
+
+proc_frame_bottom = tk.Frame(launch_frame)
+proc_frame_bottom.pack(anchor="w", padx=5, pady=(5, 5))
+
+tk.Button(proc_frame_bottom, text="MidServ.exe", command=lambda: run_or_restart_process("midserv.exe")).pack(side="left", padx=(0, 5))
+tk.Button(proc_frame_bottom, text="WinCash (.bat)", command=run_wincash_bat).pack(side="left")
+
 
 
 
