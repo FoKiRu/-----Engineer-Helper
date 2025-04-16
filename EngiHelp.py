@@ -1,6 +1,9 @@
 # ======================= Импорты =======================
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
+from pathlib import Path
+from collections import Counter
+from tkinter import messagebox
 import os
 import re
 import shutil
@@ -8,14 +11,10 @@ import traceback
 import json
 import psutil
 import subprocess
-from pathlib import Path
-from collections import Counter
-import os
-from tkinter import messagebox
 import time
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.3.18"
+SCRIPT_VERSION = "v0.4.20"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -41,8 +40,8 @@ def load_config_paths():
     return [v for k, v in sorted(config.items()) if k.startswith("ini_dir")]
 
 """
-print("📁 Текущая рабочая директория:", os.getcwd())
-print("📄 Ожидаемый путь к config.json:", os.path.abspath("config.json"))
+print("Текущая рабочая директория:", os.getcwd())
+print("Ожидаемый путь к config.json:", os.path.abspath("config.json"))
 """
 
 def save_config_path(new_path):
@@ -143,6 +142,7 @@ def get_usesql_value():
         pass
     return "0"
 
+
 def update_ini_file(filepath, value, key):
     try:
         shutil.copy2(filepath, filepath + ".bak")
@@ -218,7 +218,7 @@ def run_update_usesql_value(value):
 # === GUI ===
 root = tk.Tk()
 root.title("EngiHelp")
-root.geometry("460x300")
+root.geometry("460x440")
 
 # Центрирование окна
 screen_width = root.winfo_screenwidth()
@@ -226,8 +226,8 @@ screen_height = root.winfo_screenheight()
 cursor_x = root.winfo_pointerx()
 cursor_y = root.winfo_pointery()
 x = max(0, min(screen_width - 460, cursor_x - 230))
-y = max(0, min(screen_height - 300, cursor_y - 140))
-root.geometry(f"460x300+{x}+{y}")
+y = max(0, min(screen_height - 440, cursor_y - 140))
+root.geometry(f"460x440+{x}+{y}")
 
 notebook = ttk.Notebook(root)
 notebook.pack(fill="both", expand=True)
@@ -243,8 +243,10 @@ path_var = tk.StringVar()
 ini_paths = load_config_paths()
 if ini_paths:
     path_var.set(ini_paths[0])
+
 path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
 path_entry.pack(side="left", fill="x", expand=True)
+
 
 def browse_path():
     selected = filedialog.askdirectory()
@@ -259,12 +261,56 @@ def browse_path():
 
 tk.Button(path_frame, text="Обзор", command=browse_path).pack(side="left", padx=5)
 
+def update_wincash_info():
+    win_ini = os.path.join(ini_path, "wincash.ini")
+    station = ""
+    server = ""
+
+    if not os.path.isfile(win_ini):
+        print(f"[!] Файл не найден: {win_ini}")
+        return
+
+    try:
+        try:
+            with open(win_ini, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            with open(win_ini, "r", encoding="cp1251") as f:
+                lines = f.readlines()
+
+        for line in lines:
+            line = line.strip()
+            # Удаляем пробелы по краям ключей, и разделяем по первому "="
+            if "=" in line:
+                key, value = map(str.strip, line.split("=", 1))
+                key_lower = key.lower()
+                if key_lower == "station":
+                    station = value
+                elif key_lower == "server":
+                    server = value
+
+    except Exception as e:
+        print(f"[!] Ошибка при чтении wincash.ini: {e}")
+        return
+
+    if station:
+        station_var.set(station)
+    if server:
+        server_var.set(server)
+
+
 def apply_path(event=None):
     global ini_path, INI_FILE_USESQL
     ini_path = path_var.get()
     INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
+
+    if not os.path.isdir(ini_path):
+        messagebox.showerror("Ошибка", f"Путь не найден:\n{ini_path}")
+        return
+
     save_config_path(ini_path)
     on_check()
+    update_wincash_info()
 
 path_entry.bind("<<ComboboxSelected>>", apply_path) # Обновление после выбора пути из списка
 #tk.Button(settings_tab, text="Сохранить путь", command=apply_path).pack(padx=10, pady=(5, 10), anchor="w")
@@ -299,9 +345,9 @@ def is_process_running(process_name):
 
 def check_program_process():
     if is_process_running("refsrv.exe"):
-        messagebox.showinfo("Проверка", "✅ Программа запущена.")
+        messagebox.showinfo("Проверка", "Программа запущена.")
     else:
-        messagebox.showwarning("Проверка", "❌ Программа не найдена.")
+        messagebox.showwarning("Проверка", "Программа не найдена.")
 """
 # ======================= Запуск / рестарт Ref, Mid Srv =======================
 def run_or_restart_process(exe_name):
@@ -408,6 +454,74 @@ usesql_cb.pack(padx=10, pady=(0, 5), anchor='w')
 
 usedbsync_cb = tk.Checkbutton(settings_tab, variable=usedbsync_var, text="UseDBSync", command=toggle_usedbsync, anchor="w", width=20, justify='left')
 usedbsync_cb.pack(padx=10, pady=(0, 5), anchor='w')
+
+# ======================= Параметры из wincash.ini =======================
+station_var = tk.StringVar()
+server_var = tk.StringVar()
+
+def load_wincash_params():
+    wincash_path = os.path.join(ini_path, "wincash.ini")
+    if not os.path.isfile(wincash_path):
+        return
+    try:
+        with open(wincash_path, 'r', encoding='utf-8') as file:
+            lines = file.readlines()
+    except UnicodeDecodeError:
+        with open(wincash_path, 'r', encoding='cp1251') as file:
+            lines = file.readlines()
+
+    for line in lines:
+        if line.strip().lower().startswith("station="):
+            station_var.set(line.strip().split("=", 1)[-1])
+        elif line.strip().lower().startswith("server ="):
+            server_var.set(line.strip().split("=", 1)[-1])
+
+def save_wincash_params():
+    wincash_path = os.path.join(ini_path, "wincash.ini")
+    if not os.path.isfile(wincash_path):
+        messagebox.showerror("Ошибка", "Файл wincash.ini не найден.")
+        return
+    try:
+        with open(wincash_path, 'r', encoding='utf-8') as file:
+            lines = file.readlines()
+    except UnicodeDecodeError:
+        with open(wincash_path, 'r', encoding='cp1251') as file:
+            lines = file.readlines()
+
+    new_lines = []
+    for line in lines:
+        if line.strip().lower().startswith("station="):
+            new_lines.append(f"STATION={station_var.get()}\n")
+        elif line.strip().lower().startswith("server ="):
+            new_lines.append(f"Server ={server_var.get()}\n")
+        else:
+            new_lines.append(line)
+
+    try:
+        with open(wincash_path, 'w', encoding='cp1251') as file:
+            file.writelines(new_lines)
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось сохранить файл:\n{e}")
+
+# === UI ===
+info_frame = tk.LabelFrame(settings_tab, text="wincash.ini параметры")
+info_frame.pack(padx=10, pady=(5, 10), fill="x")
+
+tk.Label(info_frame, text="STATION:").grid(row=0, column=0, sticky="w")
+tk.Entry(info_frame, textvariable=station_var).grid(row=0, column=1, sticky="ew", padx=5)
+
+tk.Label(info_frame, text="Server:").grid(row=1, column=0, sticky="w")
+tk.Entry(info_frame, textvariable=server_var).grid(row=1, column=1, sticky="ew", padx=5)
+
+
+# Автосохранение при любом изменении
+station_var.trace_add("write", lambda *args: save_wincash_params())
+server_var.trace_add("write", lambda *args: save_wincash_params())
+
+info_frame.grid_columnconfigure(1, weight=1)
+
+# Автозагрузка значений при старте
+load_wincash_params()
 
 # Подсказка при наведении на кнопку "Проверить файлы"
 def create_tooltip(widget, text):
