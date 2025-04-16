@@ -15,8 +15,9 @@ from tkinter import messagebox
 import time
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.3.17"
+SCRIPT_VERSION = "v0.3.18"
 AUTHOR = "Автор: Кирилл Рутенко"
+EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
     "EngiHelp — инструмент для работы с INI-файлами R-Keeper:\n"
     "управление UseDBSync/UseSQL, запуск процессов, мультиподдержка версий,\n"
@@ -354,23 +355,47 @@ def run_wincash_bat():
     except Exception as e:
         messagebox.showerror("Ошибка запуска", str(e))
 
+def run_refsrv_and_rk7man():
+    run_or_restart_process("refsrv.exe")
+    time.sleep(1.5)
+    run_rk7man()
 
-# ======================= Блок запуска процессов =======================
+# ======================= Запуск MidServ + WinCash =======================
+def run_midserv_and_wincash():
+    run_or_restart_process("midserv.exe")
+    run_wincash_bat()
+
+
+# ======================= Запуск / запуск+группы =======================
 launch_frame = tk.LabelFrame(settings_tab, text="Запуск")
-launch_frame.pack(padx=10, pady=(10, 10), anchor="w", fill="x")
+launch_frame.pack(padx=10, pady=(10, 10), fill="x")
 
-proc_frame_top = tk.Frame(launch_frame)
-proc_frame_top.pack(anchor="w", padx=5, pady=(5, 0))
+# 3 колонки в launch_frame
+col1 = tk.Frame(launch_frame)
+col2 = tk.Frame(launch_frame)
+col3 = tk.Frame(launch_frame)
 
-tk.Button(proc_frame_top, text="Refsrv", command=lambda: run_or_restart_process("refsrv.exe")).pack(side="left", padx=(0, 5))
-tk.Button(proc_frame_top, text="RK7man", command=run_rk7man).pack(side="left")
+col1.grid(row=0, column=0, sticky="nw", padx=5, pady=5)
+col2.grid(row=0, column=1, sticky="nw", padx=5, pady=5)
+col3.grid(row=0, column=2, sticky="nw", padx=5, pady=5)
 
-proc_frame_bottom = tk.Frame(launch_frame)
-proc_frame_bottom.pack(anchor="w", padx=5, pady=(5, 5))
+# Строка 0: две комбинированные кнопки
+tk.Button(col1, text="Refsrv + RK7man", command=run_refsrv_and_rk7man, width=22)\
+    .pack(anchor="w", pady=(0, 4))
+tk.Button(col2, text="MidServ + WinCash", command=run_midserv_and_wincash, width=22)\
+    .pack(anchor="w", pady=(0, 4))
 
-tk.Button(proc_frame_bottom, text="MidServ.exe", command=lambda: run_or_restart_process("midserv.exe")).pack(side="left", padx=(0, 5))
-tk.Button(proc_frame_bottom, text="WinCash (.bat)", command=run_wincash_bat).pack(side="left")
+# Строка 1: одиночные кнопки
+tk.Button(col1, text="Refsrv", command=lambda: run_or_restart_process("refsrv.exe"), width=22)\
+    .pack(anchor="w", pady=2)
+tk.Button(col1, text="RK7man", command=run_rk7man, width=22)\
+    .pack(anchor="w", pady=2)
 
+# Строка 2
+tk.Button(col2, text="MidServ", command=lambda: run_or_restart_process("midserv.exe"), width=22)\
+    .pack(anchor="w", pady=2)
+tk.Button(col2, text="WinCash", command=run_wincash_bat, width=22)\
+    .pack(anchor="w", pady=2)
 
 
 
@@ -423,7 +448,7 @@ create_tooltip(check_btn, "Проверка наличия INI-файлов и �
 # Info tab
 info_tab = tk.Frame(notebook)
 notebook.add(info_tab, text="О программе")
-info_label = tk.Label(info_tab, text=f"{DESCRIPTION}\n{AUTHOR}\n{SCRIPT_VERSION}", justify="left", anchor="nw")
+info_label = tk.Label(info_tab, text=f"{DESCRIPTION}\n{AUTHOR}\n{EMAIL}\n{SCRIPT_VERSION}", justify="left", anchor="nw")
 info_label.pack(padx=10, pady=10, anchor="nw", fill="both", expand=True)
 info_label.bind('<Configure>', lambda e: info_label.config(wraplength=e.width - 20))
 
