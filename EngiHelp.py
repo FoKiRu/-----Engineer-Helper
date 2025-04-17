@@ -14,7 +14,7 @@ import subprocess
 import time
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.4.20"
+SCRIPT_VERSION = "v0.4.21"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -238,7 +238,7 @@ notebook.add(settings_tab, text="Параметры")
 # Выбор пути
 path_frame = tk.Frame(settings_tab)
 path_frame.pack(fill="x", padx=10, pady=(10, 0))
-tk.Label(path_frame, text="Путь к INI-файлам:").pack(anchor="w")
+tk.Label(path_frame, text="Путь к RK7:").pack(anchor="w")
 path_var = tk.StringVar()
 ini_paths = load_config_paths()
 if ini_paths:
@@ -478,47 +478,78 @@ def load_wincash_params():
 
 def save_wincash_params():
     wincash_path = os.path.join(ini_path, "wincash.ini")
-    if not os.path.isfile(wincash_path):
-        messagebox.showerror("Ошибка", "Файл wincash.ini не найден.")
-        return
-    try:
-        with open(wincash_path, 'r', encoding='utf-8') as file:
-            lines = file.readlines()
-    except UnicodeDecodeError:
-        with open(wincash_path, 'r', encoding='cp1251') as file:
-            lines = file.readlines()
+    rkeeper_path = os.path.join(ini_path, "RKEEPER.INI")
+    server_value = server_var.get()
+    
+    # --- Обновление wincash.ini ---
+    if os.path.isfile(wincash_path):
+        try:
+            with open(wincash_path, 'r', encoding='utf-8') as file:
+                lines = file.readlines()
+        except UnicodeDecodeError:
+            with open(wincash_path, 'r', encoding='cp1251') as file:
+                lines = file.readlines()
 
-    new_lines = []
-    for line in lines:
-        if line.strip().lower().startswith("station="):
-            new_lines.append(f"STATION={station_var.get()}\n")
-        elif line.strip().lower().startswith("server ="):
-            new_lines.append(f"Server ={server_var.get()}\n")
-        else:
-            new_lines.append(line)
+        new_lines = []
+        for line in lines:
+            if line.strip().lower().startswith("station="):
+                new_lines.append(f"STATION={station_var.get()}\n")
+            elif line.strip().lower().startswith("server ="):
+                new_lines.append(f"Server ={server_value}\n")
+            else:
+                new_lines.append(line)
 
-    try:
-        with open(wincash_path, 'w', encoding='cp1251') as file:
-            file.writelines(new_lines)
-    except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось сохранить файл:\n{e}")
+        try:
+            with open(wincash_path, 'w', encoding='cp1251') as file:
+                file.writelines(new_lines)
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить wincash.ini:\n{e}")
+    
+    # --- Обновление RKEEPER.INI (Client = ...) ---
+    if os.path.isfile(rkeeper_path):
+        try:
+            with open(rkeeper_path, 'r', encoding='utf-8') as file:
+                lines = file.readlines()
+        except UnicodeDecodeError:
+            with open(rkeeper_path, 'r', encoding='cp1251') as file:
+                lines = file.readlines()
+
+        new_rk_lines = []
+        client_updated = False
+        for line in lines:
+            if re.match(r"^\s*Client\s*=", line, re.IGNORECASE):
+                new_rk_lines.append(f"Client = {server_value}\n")
+                client_updated = True
+            else:
+                new_rk_lines.append(line)
+
+        if not client_updated:
+            new_rk_lines.append(f"\nClient = {server_value}\n")
+
+        try:
+            with open(rkeeper_path, 'w', encoding='cp1251') as file:
+                file.writelines(new_rk_lines)
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить RKEEPER.INI:\n{e}")
+
+
 
 # === UI ===
-info_frame = tk.LabelFrame(settings_tab, text="wincash.ini параметры")
+info_frame = tk.LabelFrame(settings_tab, text="Config's")
 info_frame.pack(padx=10, pady=(5, 10), fill="x")
 
-tk.Label(info_frame, text="STATION:").grid(row=0, column=0, sticky="w")
-tk.Entry(info_frame, textvariable=station_var).grid(row=0, column=1, sticky="ew", padx=5)
+tk.Label(info_frame, text="MID:").grid(row=0, column=0, sticky="w")
+tk.Entry(info_frame, textvariable=server_var).grid(row=0, column=1, sticky="ew", padx=5)
 
-tk.Label(info_frame, text="Server:").grid(row=1, column=0, sticky="w")
-tk.Entry(info_frame, textvariable=server_var).grid(row=1, column=1, sticky="ew", padx=5)
-
+tk.Label(info_frame, text="CASH:").grid(row=1, column=0, sticky="w")
+tk.Entry(info_frame, textvariable=station_var).grid(row=1, column=1, sticky="ew", padx=5)
 
 # Автосохранение при любом изменении
 station_var.trace_add("write", lambda *args: save_wincash_params())
 server_var.trace_add("write", lambda *args: save_wincash_params())
 
 info_frame.grid_columnconfigure(1, weight=1)
+
 
 # Автозагрузка значений при старте
 load_wincash_params()
