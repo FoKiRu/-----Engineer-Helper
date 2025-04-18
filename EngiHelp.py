@@ -147,27 +147,47 @@ def get_usesql_value():
         pass
     return "0"
 
-
 def update_ini_file(filepath, value, key):
     try:
         shutil.copy2(filepath, filepath + ".bak")
+
+        filename = os.path.basename(filepath).lower()
+
         try:
             with open(filepath, 'r', encoding='utf-8') as file:
                 lines = file.readlines()
         except UnicodeDecodeError:
             with open(filepath, 'r', encoding='cp1251') as file:
                 lines = file.readlines()
+
         updated = False
+        new_lines = []
+        key_found = False
+
+        for line in lines:
+            if re.match(fr'^\s*{key}\s*=.*', line, re.IGNORECASE):
+                new_lines.append(f"{key}={value}\n")
+                key_found = True
+                updated = True
+            else:
+                new_lines.append(line)
+
+        # если параметр не найден
+        if not key_found:
+            if filename == "rk7man.ini":
+                # ничего не добавляем
+                pass
+            else:
+                # добавляем секцию и параметр
+                new_lines.append("\n[DBSYNC]\n")
+                new_lines.append(f"{key}={value}\n")
+                updated = True
+
         with open(filepath, 'w', encoding='cp1251') as file:
-            for line in lines:
-                if re.match(fr'^\s*{key}\s*=.*', line, re.IGNORECASE):
-                    file.write(f"{key}={value}\n")
-                    updated = True
-                else:
-                    file.write(line)
-            if not updated:
-                file.write(f"\n{key}={value}\n")
-        return True
+            file.writelines(new_lines)
+
+        return updated
+
     except Exception as e:
         print(f"[ОШИБКА] {filepath}: {e}")
         traceback.print_exc()
@@ -177,15 +197,23 @@ def check_files():
     found, missing = [], []
     for filename in FILES:
         full_path = os.path.join(ini_path, filename)
+
+        # 🔍 DEBUG: печатаем путь и факт существования
+        print(f"[DEBUG] Проверяем файл: {filename} => {full_path}")
+        print(f"[DEBUG] Существует? {'Да' if os.path.isfile(full_path) else 'Нет'}")
+
         if os.path.isfile(full_path):
             found.append(filename)
         else:
             missing.append(filename)
+
     return found, missing
+
 
 def on_check():
     found, missing = check_files()
-    if missing:
+    filtered_missing = [f for f in missing if f.lower() != "rk7man.ini"]
+    if filtered_missing:
         usedbsync_cb.config(state="disabled", fg="gray")
         usesql_cb.config(state="disabled", fg="gray")
         return False
@@ -195,7 +223,6 @@ def on_check():
         usedbsync_var.set(int(detect_consensus_value()))
         usesql_var.set(int(get_usesql_value()))
         return True
-
 
 def toggle_usedbsync():
     value = "1" if usedbsync_var.get() else "0"
@@ -208,6 +235,8 @@ def toggle_usesql():
 def run_update(value):
     failed = []
     for filename in FILES:
+        if filename.lower() == "rk7man.ini":
+            continue
         full_path = os.path.join(ini_path, filename)
         success = update_ini_file(full_path, value, "UseDBSync")
         if not success:
@@ -636,15 +665,19 @@ def copy_missing_ini_files():
         messagebox.showwarning("Нет файлов", "Отсутствующие файлы не найдены даже в bin\\win\\ini.")
 
 def on_check_with_message():
-    result = on_check()
-    if result:
-        messagebox.showinfo("Успех", "Все необходимые файлы найдены.")
-    else:
-        missing = check_files()[1]
+    found, missing = check_files()
+
+    if missing:  # не исключаем rk7man.ini
         if messagebox.askyesno("Внимание", f"Файлы не найдены: {', '.join(missing)}\nДобавить из папки ini?"):
             copy_missing_ini_files()
             on_check()
             update_wincash_info()
+    else:
+        messagebox.showinfo("Успех", "Все необходимые файлы найдены.")
+
+
+
+
 
 # Кнопки "Проверить файлы" и "Показать папки"
 check_folder_frame = tk.Frame(settings_tab)
