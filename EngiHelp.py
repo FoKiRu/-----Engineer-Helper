@@ -14,7 +14,7 @@ import subprocess
 import time
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.4.21"
+SCRIPT_VERSION = "v0.4.22"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -54,6 +54,11 @@ def save_config_path(new_path):
     config = {f"ini_dir{i}": path for i, path in enumerate(paths)}
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=4, ensure_ascii=False)
+
+    # Обновляем список в комбобоксе
+    if 'path_entry' in globals():
+        path_entry['values'] = paths
+
 
 # ======================= Определение путей и начальных переменных =======================
 ini_paths = load_config_paths()
@@ -244,8 +249,10 @@ ini_paths = load_config_paths()
 if ini_paths:
     path_var.set(ini_paths[0])
 
+path_var.trace_add("write", on_path_change)
 path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
 path_entry.pack(side="left", fill="x", expand=True)
+
 
 
 def browse_path():
@@ -313,25 +320,19 @@ def apply_path(event=None):
     update_wincash_info()
 
 path_entry.bind("<<ComboboxSelected>>", apply_path) # Обновление после выбора пути из списка
-#tk.Button(settings_tab, text="Сохранить путь", command=apply_path).pack(padx=10, pady=(5, 10), anchor="w")
 
-def show_product_folders():
+# Кнопка "Открыть путь"
+def open_explorer_to_root():
     product_root = find_product_root(path_var.get())
     if not product_root:
-        messagebox.showwarning("Ошибка", "Корневая папка продукта не определенна.")
+        messagebox.showwarning("Ошибка", "Не удалось определить корневую папку продукта.")
         return
-    
     try:
-        items= os.listdir(product_root)
-        folders = [name for name in items if os.path.isdir(os.path.join(product_root, name))]
-        if folders:
-            messagebox.showinfo("Папки в корне продукта", "\n".join(folders))
-        else:
-            messagebox.showinfo("Папки в корне продукта", "Папки не найдены.")
+        os.startfile(product_root)
     except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось получить список папок:\n{e}")
+        messagebox.showerror("Ошибка", f"Не удалось открыть проводник:\n{e}")
 
-tk.Button(settings_tab, text="Показать папки", command=show_product_folders).pack(padx=10, pady=(0, 10), anchor="w")
+tk.Button(settings_tab, text="Открыть путь", command=open_explorer_to_root).pack(padx=10, pady=(0, 0), anchor="w")
 
 """
 def is_process_running(process_name):
@@ -584,10 +585,37 @@ def on_check_with_message():
     else:
         messagebox.showwarning("Внимание", f"Файлы не найдены: {', '.join(check_files()[1])}")
 
-
+"""
 check_btn = tk.Button(settings_tab, text="Проверить файлы", command=on_check_with_message)
 check_btn.pack(padx=10, pady=10, anchor="w")
 create_tooltip(check_btn, "Проверка наличия INI-файлов и обновление состояния параметров.")
+"""
+# Кнопки "Проверить файлы" и "Показать папки"
+check_folder_frame = tk.Frame(settings_tab)
+check_folder_frame.pack(padx=10, pady=10, anchor="w")
+
+check_btn = tk.Button(check_folder_frame, text="Проверить файлы", command=on_check_with_message)
+check_btn.pack(side="left")
+create_tooltip(check_btn, "Проверка наличия INI-файлов и обновление состояния параметров.")
+
+def show_product_folders():
+    product_root = find_product_root(path_var.get())
+    if not product_root:
+        messagebox.showwarning("Ошибка", "Корневая папка продукта не определена.")
+        return
+    
+    try:
+        items = os.listdir(product_root)
+        folders = [name for name in items if os.path.isdir(os.path.join(product_root, name))]
+        if folders:
+            messagebox.showinfo("Папки в корне продукта", "\n".join(folders))
+        else:
+            messagebox.showinfo("Папки в корне продукта", "Папки не найдены.")
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось получить список папок:\n{e}")
+
+tk.Button(check_folder_frame, text="Показать папки", command=show_product_folders).pack(side="left", padx=5)
+
 
 
 # Info tab
