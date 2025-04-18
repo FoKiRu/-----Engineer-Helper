@@ -14,7 +14,7 @@ import subprocess
 import time
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.4.22"
+SCRIPT_VERSION = "v0.5.22"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -24,7 +24,7 @@ DESCRIPTION = (
 )
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
 CONFIG_FILE = "config.json"
-FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI"]
+FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
 
 # =================== Работа с config.json (мульти-пути) =============
 def load_config_paths():
@@ -249,7 +249,8 @@ ini_paths = load_config_paths()
 if ini_paths:
     path_var.set(ini_paths[0])
 
-path_var.trace_add("write", on_path_change)
+# Автосохранение вручную введённого пути
+path_var.trace_add("write", lambda *args: save_config_path(path_var.get()))
 path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
 path_entry.pack(side="left", fill="x", expand=True)
 
@@ -257,14 +258,49 @@ path_entry.pack(side="left", fill="x", expand=True)
 
 def browse_path():
     selected = filedialog.askdirectory()
-    if selected:
-        product_root = find_product_root(selected)
-        if product_root:
-            bin_win_path = os.path.join(product_root, "bin", "win")
-            path_var.set(bin_win_path)
-            apply_path()
-        else:
-            messagebox.showerror("Ошибка", "Выбран некорректный путь.\nТребуется папка, содержащая bin/win с INI-файлами.")
+    if not selected:
+        return
+
+    # Попробуем найти bin/win и подготовиться к проверке файлов
+    bin_win_path = None
+    if os.path.basename(selected).lower() == "win":
+        parent = os.path.dirname(selected)
+        if os.path.basename(parent).lower() == "bin":
+            bin_win_path = selected
+    elif os.path.basename(selected).lower() == "bin":
+        bin_win_path = os.path.join(selected, "win")
+    else:
+        bin_win_path = os.path.join(selected, "bin", "win")
+
+    # Список файлов, которые нужно проверить (включая rk7man.ini)
+    required_files = FILES
+
+    # Копируем отсутствующие файлы из bin/win/ini
+    if os.path.isdir(bin_win_path):
+        missing = [f for f in required_files if not os.path.isfile(os.path.join(bin_win_path, f))]
+        bin_win_ini = os.path.join(bin_win_path, "ini")
+        copied = []
+        for f in missing:
+            source = os.path.join(bin_win_ini, f)
+            target = os.path.join(bin_win_path, f)
+            if os.path.isfile(source):
+                try:
+                    shutil.copy2(source, target)
+                    copied.append(f)
+                except Exception as e:
+                    messagebox.showerror("Ошибка", f"Не удалось скопировать {f}:\n{e}")
+        if copied:
+            messagebox.showinfo("Файлы скопированы", f"Скопированы из bin\\win\\ini:\n{', '.join(copied)}")
+
+    # Теперь проверяем наличие файлов и определяем корень продукта
+    product_root = find_product_root(selected)
+    if not product_root:
+        messagebox.showerror("Ошибка", "Выбран некорректный путь.\nТребуется папка, содержащая bin/win с INI-файлами.")
+        return
+
+    # Обновляем путь и запускаем apply_path()
+    path_var.set(os.path.join(product_root, "bin", "win"))
+    apply_path()
 
 tk.Button(path_frame, text="Обзор", command=browse_path).pack(side="left", padx=5)
 
@@ -578,18 +614,38 @@ def create_tooltip(widget, text):
     widget.bind("<Enter>", on_enter)
     widget.bind("<Leave>", on_leave)
 
+def copy_missing_ini_files():
+    bin_win_path = ini_path
+    bin_win_ini = os.path.join(bin_win_path, "ini")
+    missing = [f for f in FILES if not os.path.isfile(os.path.join(bin_win_path, f))]
+    copied = []
+    for f in missing:
+        source = os.path.join(bin_win_ini, f)
+        target = os.path.join(bin_win_path, f)
+        if os.path.isfile(source):
+            try:
+                shutil.copy2(source, target)
+                copied.append(f)
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось скопировать {f}:\n{e}")
+    if copied:
+        messagebox.showinfo("Файлы скопированы", f"Скопированы из bin\\win\\ini:\n{', '.join(copied)}")
+    elif not missing:
+        messagebox.showinfo("Все файлы на месте", "Все необходимые INI-файлы уже присутствуют.")
+    else:
+        messagebox.showwarning("Нет файлов", "Отсутствующие файлы не найдены даже в bin\\win\\ini.")
+
 def on_check_with_message():
     result = on_check()
     if result:
         messagebox.showinfo("Успех", "Все необходимые файлы найдены.")
     else:
-        messagebox.showwarning("Внимание", f"Файлы не найдены: {', '.join(check_files()[1])}")
+        missing = check_files()[1]
+        if messagebox.askyesno("Внимание", f"Файлы не найдены: {', '.join(missing)}\nДобавить из папки ini?"):
+            copy_missing_ini_files()
+            on_check()
+            update_wincash_info()
 
-"""
-check_btn = tk.Button(settings_tab, text="Проверить файлы", command=on_check_with_message)
-check_btn.pack(padx=10, pady=10, anchor="w")
-create_tooltip(check_btn, "Проверка наличия INI-файлов и обновление состояния параметров.")
-"""
 # Кнопки "Проверить файлы" и "Показать папки"
 check_folder_frame = tk.Frame(settings_tab)
 check_folder_frame.pack(padx=10, pady=10, anchor="w")
