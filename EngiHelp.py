@@ -12,9 +12,10 @@ import json
 import psutil
 import subprocess
 import time
+import threading
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.5.22"
+SCRIPT_VERSION = "v0.5.23"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -197,11 +198,11 @@ def check_files():
     found, missing = [], []
     for filename in FILES:
         full_path = os.path.join(ini_path, filename)
-
+        """
         # 🔍 DEBUG: печатаем путь и факт существования
         print(f"[DEBUG] Проверяем файл: {filename} => {full_path}")
         print(f"[DEBUG] Существует? {'Да' if os.path.isfile(full_path) else 'Нет'}")
-
+        """
         if os.path.isfile(full_path):
             found.append(filename)
         else:
@@ -252,7 +253,7 @@ def run_update_usesql_value(value):
 # === GUI ===
 root = tk.Tk()
 root.title("EngiHelp")
-root.geometry("460x440")
+root.geometry("460x465")
 
 # Центрирование окна
 screen_width = root.winfo_screenwidth()
@@ -260,8 +261,8 @@ screen_height = root.winfo_screenheight()
 cursor_x = root.winfo_pointerx()
 cursor_y = root.winfo_pointery()
 x = max(0, min(screen_width - 460, cursor_x - 230))
-y = max(0, min(screen_height - 440, cursor_y - 140))
-root.geometry(f"460x440+{x}+{y}")
+y = max(0, min(screen_height - 465, cursor_y - 140))
+root.geometry(f"460x465+{x}+{y}")
 
 notebook = ttk.Notebook(root)
 notebook.pack(fill="both", expand=True)
@@ -458,14 +459,35 @@ def run_rk7man():
 
 # ======================= Запуск wincash.bat =======================
 def run_wincash_bat():
-    bat_path = os.path.join(ini_path, "wincash.bat")
-    if not os.path.isfile(bat_path):
-        messagebox.showerror("Ошибка", f"Файл не найден:\n{bat_path}")
-        return
-    try:
-        os.startfile(bat_path)
-    except Exception as e:
-        messagebox.showerror("Ошибка запуска", str(e))
+    def run_bat():
+        bat_path = os.path.join(ini_path, "wincash.bat")
+        
+        # Проверка наличия файла
+        if not os.path.isfile(bat_path):
+            messagebox.showerror("Ошибка", f"Файл не найден:\n{bat_path}")
+            return
+        
+        try:
+            # Запуск .bat файла с выводом ошибок
+            print(f"[DEBUG] Попытка запуска: {bat_path}")
+            result = subprocess.run([bat_path], capture_output=True, text=True, shell=True, cwd=ini_path)
+
+            # Проверка результата
+            if result.returncode != 0:
+                # Если код завершения не 0, выводим ошибку
+                print(f"[ERROR] Ошибка при выполнении bat файла: {result.stderr}")
+                messagebox.showerror("Ошибка запуска", f"Ошибка при запуске {bat_path}:\n{result.stderr}")
+            else:
+                # Если всё прошло успешно, выводим результат
+                print(f"[INFO] bat файл выполнен успешно:\n{result.stdout}")
+        except Exception as e:
+            # Обработка исключений
+            messagebox.showerror("Ошибка запуска", f"Не удалось запустить {bat_path}:\n{str(e)}")
+
+    # Запуск функции в отдельном потоке
+    threading.Thread(target=run_bat, daemon=True).start()
+
+# DOSCASH.EXE нужно закрыть перед запуском если есть
 
 def run_refsrv_and_rk7man():
     run_or_restart_process("refsrv.exe")
@@ -475,7 +497,23 @@ def run_refsrv_and_rk7man():
 # ======================= Запуск MidServ + WinCash =======================
 def run_midserv_and_wincash():
     run_or_restart_process("midserv.exe")
+    time.sleep(1.5)
     run_wincash_bat()
+
+
+def kill_doscash_process():
+    # Проходим по всем процессам
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            # Если имя процесса совпадает с 'DOSCASH.EXE', завершаем его
+            if proc.info['name'].lower() == "doscash.exe":
+                proc.terminate()  # Завершаем процесс
+                return
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    # Если процесс не найден, показываем предупреждение
+    messagebox.showwarning("Предупреждение", "Процесс DOSCASH.EXE не найден.")
 
 
 # ======================= Запуск / запуск+группы =======================
@@ -508,6 +546,11 @@ tk.Button(col2, text="MidServ", command=lambda: run_or_restart_process("midserv.
     .pack(anchor="w", pady=2)
 tk.Button(col2, text="WinCash", command=run_wincash_bat, width=22)\
     .pack(anchor="w", pady=2)
+
+# Новая кнопка для завершения процесса DOSCASH.EXE рядом с WinCash
+tk.Button(col2, text="Закрыть DOSCASH.EXE", command=kill_doscash_process, width=22)\
+    .pack(anchor="w", pady=2)
+
 
 
 
