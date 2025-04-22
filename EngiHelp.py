@@ -3,7 +3,6 @@ import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 from pathlib import Path
 from collections import Counter
-from tkinter import messagebox
 import os
 import re
 import shutil
@@ -500,6 +499,35 @@ def run_midserv_and_wincash():
     time.sleep(1.5)
     run_wincash_bat()
 
+# ======================= Закрыть процес =======================
+def kill_midserv_process():
+    # Проходим по всем процессам
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            if proc.info['name'].lower() == "midserv.exe":
+                proc.terminate()  # Завершаем процесс
+                return
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+def kill_rk7man_process():
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            if proc.info['name'].lower() == "rk7man.exe":
+                proc.terminate()
+                return
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+def kill_refsrv_process():
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            if proc.info['name'].lower() == "refsrv.exe":
+                proc.terminate()
+                return
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
 
 def kill_doscash_process():
     # Проходим по всем процессам
@@ -511,9 +539,6 @@ def kill_doscash_process():
                 return
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-
-    # Если процесс не найден, показываем предупреждение
-    messagebox.showwarning("Предупреждение", "Процесс DOSCASH.EXE не найден.")
 
 
 # ======================= Запуск / запуск+группы =======================
@@ -530,33 +555,79 @@ col2.grid(row=0, column=1, sticky="nw", padx=5, pady=5)
 col3.grid(row=0, column=2, sticky="nw", padx=5, pady=5)
 
 # Строка 0: две комбинированные кнопки
-tk.Button(col1, text="Refsrv + RK7man", command=run_refsrv_and_rk7man, width=22)\
-    .pack(anchor="w", pady=(0, 4))
-tk.Button(col2, text="MidServ + WinCash", command=run_midserv_and_wincash, width=22)\
-    .pack(anchor="w", pady=(0, 4))
+# Создаем фрейм для Refsrv + RK7man
+frame_refsrv_rk7man = tk.Frame(col1)
+frame_refsrv_rk7man.pack(anchor="w", pady=(0, 4))
+
+# Кнопка Refsrv + RK7man
+tk.Button(frame_refsrv_rk7man, text="Refsrv + RK7man", command=run_refsrv_and_rk7man, width=15)\
+    .pack(side="left")
+
+# Кнопка Close для Refsrv + RK7man
+tk.Button(frame_refsrv_rk7man, text="Close", command=lambda: kill_refsrv_process() or kill_rk7man_process(), width=5)\
+    .pack(side="left")
+
+# Создаем фрейм для MidServ + WinCash
+frame_midserv_wincash = tk.Frame(col2)
+frame_midserv_wincash.pack(anchor="w", pady=(0, 4))
+
+# Кнопка MidServ + WinCash
+tk.Button(frame_midserv_wincash, text="MidServ + WinCash", command=run_midserv_and_wincash, width=15)\
+    .pack(side="left")
+
+# Кнопка Close для MidServ + WinCash
+tk.Button(frame_midserv_wincash, text="Close", command=lambda: kill_midserv_process() or kill_doscash_process(), width=5)\
+    .pack(side="left")
 
 # Строка 1: одиночные кнопки
-tk.Button(col1, text="Refsrv", command=lambda: run_or_restart_process("refsrv.exe"), width=22)\
-    .pack(anchor="w", pady=2)
-tk.Button(col1, text="RK7man", command=run_rk7man, width=22)\
-    .pack(anchor="w", pady=2)
+# Создаем фрейм для Refsrv
+frame_refsrv = tk.Frame(col1)
+frame_refsrv.pack(anchor="w", pady=2)
 
-# Строка 2
-tk.Button(col2, text="MidServ", command=lambda: run_or_restart_process("midserv.exe"), width=22)\
-    .pack(anchor="w", pady=2)
-frame = tk.Frame(col2)  # Создаем фрейм для размещения кнопок рядом
-frame.pack(anchor="w", pady=2)  # Размещаем фрейм с выравниванием по левой стороне
+# Кнопка Refsrv
+tk.Button(frame_refsrv, text="Refsrv", command=lambda: run_or_restart_process("refsrv.exe"), width=15)\
+    .pack(side="left")
 
-# Кнопка WinCash с шириной 22
-tk.Button(frame, text="WinCash", command=run_wincash_bat, width=15)\
+# Кнопка Close для Refsrv
+tk.Button(frame_refsrv, text="Close", command=kill_refsrv_process, width=5)\
+    .pack(side="left")
+
+# Создаем фрейм для RK7man
+frame_rk7man = tk.Frame(col1)
+frame_rk7man.pack(anchor="w", pady=2)
+
+# Кнопка RK7man
+tk.Button(frame_rk7man, text="RK7man", command=run_rk7man, width=15)\
+    .pack(side="left")
+
+# Кнопка Close для RK7man
+tk.Button(frame_rk7man, text="Close", command=kill_rk7man_process, width=5)\
+    .pack(side="left")
+
+# Строка 2: одиночные кнопки
+# Создаем фрейм для MidServ
+frame_midserv = tk.Frame(col2)  
+frame_midserv.pack(anchor="w", pady=2)  # Размещаем фрейм с выравниванием по левой стороне
+
+# Кнопка MidServ
+tk.Button(frame_midserv, text="MidServ", command=lambda: run_or_restart_process("midserv.exe"), width=15)\
     .pack(side="left")  # Кнопка расположена слева в фрейме
 
-# Кнопка Close с шириной 6, расположена рядом с WinCash
-tk.Button(frame, text="Close", command=kill_doscash_process, width=5)\
-    .pack(side="left", padx=2)  # Кнопка расположена справа в том же фрейме
+# Кнопка Close для MidServ
+tk.Button(frame_midserv, text="Close", command=kill_midserv_process, width=5)\
+    .pack(side="left")  # Кнопка расположена справа в том же фрейме
 
+# Создаем фрейм для WinCash
+frame_win_cash = tk.Frame(col2)  
+frame_win_cash.pack(anchor="w", pady=2)  # Размещаем фрейм с выравниванием по левой стороне
 
+# Кнопка WinCash
+tk.Button(frame_win_cash, text="WinCash", command=run_wincash_bat, width=15)\
+    .pack(side="left")  # Кнопка расположена слева в фрейме
 
+# Кнопка Close для WinCash
+tk.Button(frame_win_cash, text="Close", command=kill_doscash_process, width=5)\
+    .pack(side="left")  # Кнопка расположена справа в том же фрейме
 
 
 # Переключатели
