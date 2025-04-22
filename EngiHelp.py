@@ -15,7 +15,7 @@ import time
 import threading
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.5.23"
+SCRIPT_VERSION = "v0.5.24"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -544,12 +544,17 @@ tk.Button(col1, text="RK7man", command=run_rk7man, width=22)\
 # Строка 2
 tk.Button(col2, text="MidServ", command=lambda: run_or_restart_process("midserv.exe"), width=22)\
     .pack(anchor="w", pady=2)
-tk.Button(col2, text="WinCash", command=run_wincash_bat, width=22)\
-    .pack(anchor="w", pady=2)
+frame = tk.Frame(col2)  # Создаем фрейм для размещения кнопок рядом
+frame.pack(anchor="w", pady=2)  # Размещаем фрейм с выравниванием по левой стороне
 
-# Новая кнопка для завершения процесса DOSCASH.EXE рядом с WinCash
-tk.Button(col2, text="Закрыть DOSCASH.EXE", command=kill_doscash_process, width=22)\
-    .pack(anchor="w", pady=2)
+# Кнопка WinCash с шириной 22
+tk.Button(frame, text="WinCash", command=run_wincash_bat, width=15)\
+    .pack(side="left")  # Кнопка расположена слева в фрейме
+
+# Кнопка Close с шириной 6, расположена рядом с WinCash
+tk.Button(frame, text="Close", command=kill_doscash_process, width=5)\
+    .pack(side="left", padx=2)  # Кнопка расположена справа в том же фрейме
+
 
 
 
