@@ -14,7 +14,7 @@ import time
 import threading
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.5.25"
+SCRIPT_VERSION = "v0.5.26"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -65,7 +65,6 @@ def save_config_path(new_path):
     # Обновляем список путей в комбобоксе
     if 'path_entry' in globals():
         path_entry['values'] = paths
-
 
 
 # ======================= Определение путей и начальных переменных =======================
@@ -297,9 +296,7 @@ def browse_path():
     selected = filedialog.askdirectory()
     if not selected:
         return
-
-    # Заменяем все обратные слэши на прямые слэши
-    selected = selected.replace("\\", "/")
+    selected = os.path.normpath(selected).replace("\\", "/")
 
     # Попробуем найти bin/win и подготовиться к проверке файлов
     bin_win_path = None
@@ -310,7 +307,12 @@ def browse_path():
     elif os.path.basename(selected).lower() == "bin":
         bin_win_path = os.path.join(selected, "win")
     else:
-        bin_win_path = os.path.join(selected, "bin", "win")
+        bin_win_path = os.path.join(selected, "bin", "win").replace("\\", "/")
+    #bin_win_path = bin_win_path.replace ("\\", "/")
+
+    # Заменяем все обратные слэши на прямые слэши
+    #selected = selected.replace("\\", "/")
+    print(bin_win_path)
 
     # Список файлов, которые нужно проверить (включая rk7man.ini)
     required_files = FILES
@@ -337,9 +339,8 @@ def browse_path():
     if not product_root:
         messagebox.showerror("Ошибка", "Выбран некорректный путь.\nТребуется папка, содержащая bin/win с INI-файлами.")
         return
-
-    # Обновляем путь с прямыми слэшами
-    path_var.set(selected.replace("\\", "/"))
+    
+    path_var.set(os.path.join(product_root, "bin", "win").replace("\\", "/"))
     apply_path()
 
 tk.Button(path_frame, text="Обзор", command=browse_path).pack(side="left", padx=5)
