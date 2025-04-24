@@ -14,7 +14,7 @@ import time
 import threading
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.5.24"
+SCRIPT_VERSION = "v0.5.25"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -45,19 +45,27 @@ print("Ожидаемый путь к config.json:", os.path.abspath("config.jso
 """
 
 def save_config_path(new_path):
+    # Заменяем все обратные слэши на прямые
+    new_path = new_path.replace("\\", "/")
+    
+    # Загружаем текущие пути и обновляем их
     paths = load_config_paths()
     if new_path in paths:
         paths.remove(new_path)
     paths.insert(0, new_path)
     paths = paths[:3]
 
+    # Формируем конфигурацию с обновленными путями
     config = {f"ini_dir{i}": path for i, path in enumerate(paths)}
+    
+    # Сохраняем конфигурацию в JSON-файл
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=4, ensure_ascii=False)
-
-    # Обновляем список в комбобоксе
+    
+    # Обновляем список путей в комбобоксе
     if 'path_entry' in globals():
         path_entry['values'] = paths
+
 
 
 # ======================= Определение путей и начальных переменных =======================
@@ -252,16 +260,16 @@ def run_update_usesql_value(value):
 # === GUI ===
 root = tk.Tk()
 root.title("EngiHelp")
-root.geometry("460x465")
+root.geometry("372x465")
 
 # Центрирование окна
 screen_width = root.winfo_screenwidth()
 screen_height = root.winfo_screenheight()
 cursor_x = root.winfo_pointerx()
 cursor_y = root.winfo_pointery()
-x = max(0, min(screen_width - 460, cursor_x - 230))
+x = max(0, min(screen_width - 372, cursor_x - 230))
 y = max(0, min(screen_height - 465, cursor_y - 140))
-root.geometry(f"460x465+{x}+{y}")
+root.geometry(f"372x465+{x}+{y}")
 
 notebook = ttk.Notebook(root)
 notebook.pack(fill="both", expand=True)
@@ -289,6 +297,9 @@ def browse_path():
     selected = filedialog.askdirectory()
     if not selected:
         return
+
+    # Заменяем все обратные слэши на прямые слэши
+    selected = selected.replace("\\", "/")
 
     # Попробуем найти bin/win и подготовиться к проверке файлов
     bin_win_path = None
@@ -327,8 +338,8 @@ def browse_path():
         messagebox.showerror("Ошибка", "Выбран некорректный путь.\nТребуется папка, содержащая bin/win с INI-файлами.")
         return
 
-    # Обновляем путь и запускаем apply_path()
-    path_var.set(os.path.join(product_root, "bin", "win"))
+    # Обновляем путь с прямыми слэшами
+    path_var.set(selected.replace("\\", "/"))
     apply_path()
 
 tk.Button(path_frame, text="Обзор", command=browse_path).pack(side="left", padx=5)
