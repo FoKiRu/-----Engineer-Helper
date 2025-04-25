@@ -12,9 +12,10 @@ import psutil
 import subprocess
 import time
 import threading
+#import logging
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.5.26"
+SCRIPT_VERSION = "v0.6.26"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -26,6 +27,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрип
 CONFIG_FILE = "config.json"
 FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
 
+# Настройка логирования
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 # =================== Работа с config.json (мульти-пути) =============
 def load_config_paths():
     if not os.path.exists(CONFIG_FILE):
@@ -307,12 +310,7 @@ def browse_path():
     elif os.path.basename(selected).lower() == "bin":
         bin_win_path = os.path.join(selected, "win")
     else:
-        bin_win_path = os.path.join(selected, "bin", "win").replace("\\", "/")
-    #bin_win_path = bin_win_path.replace ("\\", "/")
-
-    # Заменяем все обратные слэши на прямые слэши
-    #selected = selected.replace("\\", "/")
-    print(bin_win_path)
+        bin_win_path = os.path.join(selected, "bin", "win")
 
     # Список файлов, которые нужно проверить (включая rk7man.ini)
     required_files = FILES
@@ -427,6 +425,62 @@ def check_program_process():
     else:
         messagebox.showwarning("Проверка", "Программа не найдена.")
 """
+
+def delete_unwanted_files():
+    # Получаем родительскую директорию для пути, исключая папку bin/win
+    parent_path = os.path.dirname(os.path.dirname(ini_path))  # Убираем bin/win
+
+    # Формируем путь к папке base
+    base_path = os.path.join(parent_path, "base")
+
+    # Нормализуем путь и заменяем обратные слэши на прямые
+    base_path = os.path.normpath(base_path).replace("\\", "/")
+
+    # Список файлов и папок, которые НЕ должны быть удалены
+    protected_files = [
+        "drvlocalize",
+        "workmods",
+        "dealerpresets.udb",
+        "ral.dat",
+        "rk7.udb",
+        "upgradedevices.abs",
+        "upgradepresets.abs"
+    ]
+    
+    # Показываем окно подтверждения перед удалением
+    if not messagebox.askyesno(
+        "Подтверждение удаления",
+        f"Вы действительно хотите очистить папку Base и оставить следующие папки и файлы:\n"
+        f"{', '.join(protected_files)}?"
+    ):
+        logging.info("Удаление отменено пользователем.")
+        return  # Если пользователь нажал "Нет", отменяем удаление
+
+    # Перебираем все файлы и папки в папке base
+    deleted_items = []
+    for item in os.listdir(base_path):
+        item_path = os.path.join(base_path, item)
+
+        # Если это файл, и он не в списке исключений, удаляем его
+        if os.path.isfile(item_path) and item not in protected_files:
+            try:
+                os.remove(item_path)
+                deleted_items.append(item)
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось удалить файл: {item_path}")
+        
+        # Если это папка, и она не в списке исключений, удаляем её
+        elif os.path.isdir(item_path) and item not in protected_files:
+            try:
+                shutil.rmtree(item_path)
+                deleted_items.append(item)
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось удалить папку: {item_path}")
+
+    # Показываем сообщение о том, какие файлы и папки были удалены
+    if not deleted_items:
+        messagebox.showinfo("Удаление файлов и папок", "Нет элементов для удаления или все элементы защищены.")
+
 # ======================= Запуск / рестарт Ref, Mid Srv =======================
 def run_or_restart_process(exe_name):
     exe_path = os.path.join(ini_path, exe_name)
@@ -807,15 +861,12 @@ def on_check_with_message():
         messagebox.showinfo("Успех", "Все необходимые файлы найдены.")
 
 
-
-
-
 # Кнопки "Проверить файлы" и "Показать папки"
 check_folder_frame = tk.Frame(settings_tab)
 check_folder_frame.pack(padx=10, pady=10, anchor="w")
 
 check_btn = tk.Button(check_folder_frame, text="Проверить файлы", command=on_check_with_message)
-check_btn.pack(side="left")
+check_btn.pack(side="left", padx=5)
 create_tooltip(check_btn, "Проверка наличия INI-файлов и обновление состояния параметров.")
 
 def show_product_folders():
@@ -835,8 +886,8 @@ def show_product_folders():
         messagebox.showerror("Ошибка", f"Не удалось получить список папок:\n{e}")
 
 tk.Button(check_folder_frame, text="Показать папки", command=show_product_folders).pack(side="left", padx=5)
-
-
+# Кнопка для удаления файла
+tk.Button(check_folder_frame, text="Clear Base", command=delete_unwanted_files).pack(side="left", padx=5)
 
 # Info tab
 info_tab = tk.Frame(notebook)
