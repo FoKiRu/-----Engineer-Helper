@@ -12,7 +12,7 @@ import psutil
 import subprocess
 import time
 import threading
-#import logging
+import logging
 
 # ======================= Константы и настройки =======================
 SCRIPT_VERSION = "v0.6.26"
@@ -29,6 +29,7 @@ FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
 
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
 # =================== Работа с config.json (мульти-пути) =============
 def load_config_paths():
     if not os.path.exists(CONFIG_FILE):
@@ -219,17 +220,20 @@ def check_files():
 
     return found, missing
 
-
 def on_check():
     found, missing = check_files()
     filtered_missing = [f for f in missing if f.lower() != "rk7man.ini"]
+    
+    # Отключаем кнопки, если файлы отсутствуют
     if filtered_missing:
         usedbsync_cb.config(state="disabled", fg="gray")
         usesql_cb.config(state="disabled", fg="gray")
+        clear_base_btn.config(state="disabled")  # Отключаем кнопку "Clear Base"
         return False
     else:
         usedbsync_cb.config(state="normal", fg="black")
         usesql_cb.config(state="normal", fg="black")
+        clear_base_btn.config(state="normal")  # Включаем кнопку "Clear Base"
         usedbsync_var.set(int(detect_consensus_value()))
         usesql_var.set(int(get_usesql_value()))
         return True
@@ -453,7 +457,6 @@ def delete_unwanted_files():
         f"Вы действительно хотите очистить папку Base и оставить следующие папки и файлы:\n"
         f"{', '.join(protected_files)}?"
     ):
-        logging.info("Удаление отменено пользователем.")
         return  # Если пользователь нажал "Нет", отменяем удаление
 
     # Перебираем все файлы и папки в папке base
@@ -886,8 +889,10 @@ def show_product_folders():
         messagebox.showerror("Ошибка", f"Не удалось получить список папок:\n{e}")
 
 tk.Button(check_folder_frame, text="Показать папки", command=show_product_folders).pack(side="left", padx=5)
+
 # Кнопка для удаления файла
-tk.Button(check_folder_frame, text="Clear Base", command=delete_unwanted_files).pack(side="left", padx=5)
+clear_base_btn = tk.Button(check_folder_frame, text="Clear Base", command=delete_unwanted_files)
+clear_base_btn.pack(side="left", padx=5)
 
 # Info tab
 info_tab = tk.Frame(notebook)
