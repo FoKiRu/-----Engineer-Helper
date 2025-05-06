@@ -13,9 +13,46 @@ import subprocess
 import time
 import threading
 import logging
+import requests
+import sys
+
+# ======================= Проверка URL файла .gitignore на GitHub =======================
+GITHUB_URL = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/.gitignore"
+
+def check_gitignore_status():
+    """
+    Функция для получения первой строки из файла .gitignore на GitHub.
+    Если первая строка равна "0", программа продолжит выполнение,
+    если "1", программа завершит выполнение.
+    """
+    try:
+        response = requests.get(GITHUB_URL)
+        response.raise_for_status()  # Проверка на успешный ответ (200)
+
+        # Чтение первой строки
+        first_line = response.text.splitlines()[0].strip()
+
+        if first_line == "0":
+            return True  # Программа может продолжить выполнение
+        elif first_line == "1":
+            return False  # Программа не будет запускаться
+        else:
+            print(f"Неожиданный формат в .gitignore: {first_line}. Программа не будет запускаться.")
+            return False
+    except requests.RequestException as e:
+        print(f"Ошибка при запросе к GitHub: {e}")
+        return False
+
+# Проверяем статус в .gitignore
+if not check_gitignore_status():
+    print("Программа не будет запущена.")
+    sys.exit()  # Завершаем программу
+
+# Если первая строка в .gitignore равна "0", продолжаем выполнение программы
+print("Программа запускается.")
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.6.26"
+SCRIPT_VERSION = "v0.7.27"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -863,15 +900,6 @@ def on_check_with_message():
     else:
         messagebox.showinfo("Успех", "Все необходимые файлы найдены.")
 
-
-# Кнопки "Проверить файлы" и "Показать папки"
-check_folder_frame = tk.Frame(settings_tab)
-check_folder_frame.pack(padx=10, pady=10, anchor="w")
-
-check_btn = tk.Button(check_folder_frame, text="Проверить файлы", command=on_check_with_message)
-check_btn.pack(side="left", padx=5)
-create_tooltip(check_btn, "Проверка наличия INI-файлов и обновление состояния параметров.")
-
 def show_product_folders():
     product_root = find_product_root(path_var.get())
     if not product_root:
@@ -888,11 +916,22 @@ def show_product_folders():
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось получить список папок:\n{e}")
 
-tk.Button(check_folder_frame, text="Показать папки", command=show_product_folders).pack(side="left", padx=5)
+# ======================= Панель с кнопками "Проверить файлы", "Показать папки" и "Clear Base" =======================
+check_folder_frame = tk.Frame(settings_tab)
+check_folder_frame.pack(padx=10, pady=10, anchor="w", fill="x")  # Убедимся, что контейнер также расширяется по ширине
+
+# Кнопка для проверки наличия файлов
+check_btn = tk.Button(check_folder_frame, text="Проверить файлы", command=on_check_with_message)
+check_btn.pack(side="left", padx=5, fill="x", expand=True)  # fill="x" и expand=True для равномерного распределения
+
+# Кнопка для отображения папок
+show_folders_btn = tk.Button(check_folder_frame, text="Показать папки", command=show_product_folders)
+show_folders_btn.pack(side="left", padx=5, fill="x", expand=True)  # fill="x" и expand=True для равномерного распределения
 
 # Кнопка для удаления файла
 clear_base_btn = tk.Button(check_folder_frame, text="Clear Base", command=delete_unwanted_files)
-clear_base_btn.pack(side="left", padx=5)
+clear_base_btn.pack(side="left", padx=5, fill="x", expand=True)  # fill="x" и expand=True для равномерного распределения
+
 
 # Info tab
 info_tab = tk.Frame(notebook)
