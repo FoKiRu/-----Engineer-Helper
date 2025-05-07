@@ -54,7 +54,7 @@ if not check_gitignore_status():
 print("Программа запускается.")
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.7.37"
+SCRIPT_VERSION = "v0.7.47"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -981,5 +981,5 @@ def update_every_1_seconds():
 # Вызовем эту функцию для начала цикла обновлений
 root.after(1000, update_every_1_seconds)
 
-# on_check()
+on_check()
 root.mainloop()
