@@ -968,5 +968,18 @@ info_label = tk.Label(info_tab, text=f"{DESCRIPTION}\n{AUTHOR}\n{EMAIL}\n{SCRIPT
 info_label.pack(padx=10, pady=10, anchor="nw", fill="both", expand=True)
 info_label.bind('<Configure>', lambda e: info_label.config(wraplength=e.width - 20))
 
-on_check()
+
+def update_every_5_seconds():
+    # Обновляем информацию о WinCash
+    update_wincash_info()
+    # Проверяем файлы и обновляем состояние
+    on_check()
+
+    # Планируем следующее обновление через 5000 миллисекунд (5 секунд)
+    root.after(5000, update_every_5_seconds)
+
+# Вызовем эту функцию для начала цикла обновлений
+root.after(5000, update_every_5_seconds)
+
+# on_check()
 root.mainloop()
