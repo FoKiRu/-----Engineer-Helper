@@ -976,10 +976,12 @@ def update_every_1_seconds():
     on_check()
 
     # Планируем следующее обновление через 1000 миллисекунд (1 секунд)
-    root.after(1000, update_every_5_seconds)
+    root.after(1000, update_every_1_seconds)
 
 # Вызовем эту функцию для начала цикла обновлений
 root.after(1000, update_every_1_seconds)
 
 on_check()
 root.mainloop()
+
+# pyinstaller --onefile --windowed --icon="иконка EngiHelp.ico" EngiHelp.py
