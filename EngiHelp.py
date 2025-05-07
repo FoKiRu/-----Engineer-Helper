@@ -15,6 +15,8 @@ import threading
 import logging
 import requests
 import sys
+import tempfile
+from PyInstaller.utils.hooks import collect_data_files
 
 # ======================= Проверка URL файла .gitignore на GitHub =======================
 GITHUB_URL = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/.gitignore"
@@ -52,7 +54,7 @@ if not check_gitignore_status():
 print("Программа запускается.")
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.7.27"
+SCRIPT_VERSION = "v0.7.37"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -300,8 +302,34 @@ def run_update_usesql_value(value):
     if not success:
         messagebox.showwarning("Ошибка", "Не удалось обновить UseSQL в rk7srv.INI")
 
+# Функция для извлечения иконки из .exe и сохранения во временную папку
+def extract_icon_to_temp():
+    # Получаем путь к текущему .exe файлу
+    exe_path = sys.executable
+    
+    # Указываем путь, куда извлечем иконку
+    temp_dir = tempfile.gettempdir()
+    icon_path = os.path.join(temp_dir, "Иконка EngiHelp.ico")
+    
+    # Проверяем, если иконка уже существует, не извлекаем заново
+    if not os.path.exists(icon_path):
+        try:
+            # Скопируем иконку из .exe в временную папку
+            with open(icon_path, "wb") as icon_file:
+                # Открываем файл .exe и ищем иконку (этот шаг можно адаптировать под конкретный случай)
+                shutil.copyfile(exe_path, icon_path)
+        except Exception as e:
+            print(f"Не удалось извлечь иконку: {e}")
+            return None
+    
+    return icon_path
+
 # === GUI ===
 root = tk.Tk()
+# Извлечение иконки и применение к окну
+icon_path = extract_icon_to_temp()
+if icon_path:
+    root.iconbitmap(icon_path)  # Применяем иконку к главному окну
 root.title("EngiHelp")
 root.geometry("372x465")
 
