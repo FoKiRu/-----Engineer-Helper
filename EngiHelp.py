@@ -54,7 +54,7 @@ if not check_gitignore_status():
 print("Программа запускается.")
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.7.47"
+SCRIPT_VERSION = "v0.7.57"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -412,43 +412,52 @@ def browse_path():
 
 tk.Button(path_frame, text="Обзор", command=browse_path).pack(side="left", padx=5)
 
-def update_wincash_info():
-    win_ini = os.path.join(ini_path, "wincash.ini")
-    station = ""
-    server = ""
+# Cинхронизацию параметров из INI-файлов с учётом приоритета по времени изменения.
+def update_ini_info_by_priority():
+    wincash_path = os.path.join(ini_path, "wincash.ini")
+    rkeeper_path = os.path.join(ini_path, "RKEEPER.INI")
 
-    if not os.path.isfile(win_ini):
-        print(f"[!] Файл не найден: {win_ini}")
+    # Если ни один не существует
+    if not os.path.isfile(wincash_path) and not os.path.isfile(rkeeper_path):
         return
 
-    try:
+    # Получаем времена изменения
+    wincash_mtime = os.path.getmtime(wincash_path) if os.path.isfile(wincash_path) else 0
+    rkeeper_mtime = os.path.getmtime(rkeeper_path) if os.path.isfile(rkeeper_path) else 0
+
+    # Если wincash.ini новее или равен
+    if wincash_mtime >= rkeeper_mtime:
         try:
-            with open(win_ini, "r", encoding="utf-8") as f:
+            with open(wincash_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
         except UnicodeDecodeError:
-            with open(win_ini, "r", encoding="cp1251") as f:
+            with open(wincash_path, 'r', encoding='cp1251') as f:
                 lines = f.readlines()
-
         for line in lines:
             line = line.strip()
-            # Удаляем пробелы по краям ключей, и разделяем по первому "="
             if "=" in line:
                 key, value = map(str.strip, line.split("=", 1))
                 key_lower = key.lower()
                 if key_lower == "station":
-                    station = value
+                    if value != station_var.get():
+                        station_var.set(value)
                 elif key_lower == "server":
-                    server = value
-
-    except Exception as e:
-        print(f"[!] Ошибка при чтении wincash.ini: {e}")
-        return
-
-    if station:
-        station_var.set(station)
-    if server:
-        server_var.set(server)
-
+                    if value != server_var.get():
+                        server_var.set(value)
+    else:
+        try:
+            with open(rkeeper_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            with open(rkeeper_path, "r", encoding="cp1251") as f:
+                lines = f.readlines()
+        for line in lines:
+            if line.strip().lower().startswith("client"):
+                _, value = line.split("=", 1)
+                value = value.strip()
+                if value and value != server_var.get():
+                    server_var.set(value)
+                break
 
 def apply_path(event=None):
     global ini_path, INI_FILE_USESQL
@@ -461,7 +470,7 @@ def apply_path(event=None):
 
     save_config_path(ini_path)
     on_check()
-    update_wincash_info()
+    update_ini_info_by_priority()
 
 path_entry.bind("<<ComboboxSelected>>", apply_path) # Обновление после выбора пути из списка
 
@@ -924,7 +933,7 @@ def on_check_with_message():
         if messagebox.askyesno("Внимание", f"Файлы не найдены: {', '.join(missing)}\nДобавить из папки ini?"):
             copy_missing_ini_files()
             on_check()
-            update_wincash_info()
+            update_ini_info_by_priority()
     else:
         messagebox.showinfo("Успех", "Все необходимые файлы найдены.")
 
@@ -970,11 +979,10 @@ info_label.bind('<Configure>', lambda e: info_label.config(wraplength=e.width - 
 
 
 def update_every_1_seconds():
-    # Обновляем информацию о WinCash
-    update_wincash_info()
+    # Обновляем информацию о WinCash и RKEEPER по приоритету
+    update_ini_info_by_priority()
     # Проверяем файлы и обновляем состояние
     on_check()
-
     # Планируем следующее обновление через 1000 миллисекунд (1 секунд)
     root.after(1000, update_every_1_seconds)
 
