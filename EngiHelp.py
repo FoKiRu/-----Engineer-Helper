@@ -17,6 +17,7 @@ import requests
 import sys
 import tempfile
 from PyInstaller.utils.hooks import collect_data_files
+from functools import partial
 
 # ======================= Проверка URL файла .gitignore на GitHub =======================
 GITHUB_URL = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/.gitignore"
@@ -54,13 +55,20 @@ if not check_gitignore_status():
 print("Программа запускается.")
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.7.57"
+SCRIPT_VERSION = "v0.7.6"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
-    "EngiHelp — инструмент для работы с INI-файлами R-Keeper:\n"
-    "управление UseDBSync/UseSQL, запуск процессов, мультиподдержка версий,\n"
-    "удобный выбор пути и конфигурация через config.json."
+    "EngiHelp — инструмент для работы с INI-файлами R-Keeper.\n"
+    "Возможности:\n"
+    "- Управление UseDBSync и UseSQL в INI-файлах\n"
+    "- Автоматическая синхронизация параметров Station и Server из wincash.ini и RKEEPER.INI с учётом времени изменений\n"
+    "- Проверка и копирование необходимых INI-файлов\n"
+    "- Удобный выбор и сохранение пути к каталогу R-Keeper\n"
+    "- Запуск и остановка ключевых сервисов (refsrv.exe, midserv.exe, rk7man.exe, wincash.bat и др.)\n"
+    "- Очистка папки base с сохранением важных файлов\n"
+    "- Поддержка мультиконфигураций через config.json\n"
+    "- Автообновление интерфейса по текущим файлам конфигурации\n"
 )
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
 CONFIG_FILE = "config.json"
@@ -68,6 +76,60 @@ FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
 
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Функция для извлечения иконки из .exe и сохранения во временную папку
+def extract_icon_to_temp():
+    # Получаем путь к текущему .exe файлу
+    exe_path = sys.executable
+    
+    # Указываем путь, куда извлечем иконку
+    temp_dir = tempfile.gettempdir()
+    icon_path = os.path.join(temp_dir, "Иконка EngiHelp.ico")
+    
+    # Проверяем, если иконка уже существует, не извлекаем заново
+    if not os.path.exists(icon_path):
+        try:
+            # Скопируем иконку из .exe в временную папку
+            with open(icon_path, "wb") as icon_file:
+                # Открываем файл .exe и ищем иконку (этот шаг можно адаптировать под конкретный случай)
+                shutil.copyfile(exe_path, icon_path)
+        except Exception as e:
+            print(f"Не удалось извлечь иконку: {e}")
+            return None
+    
+    return icon_path
+
+# === GUI ===
+root = tk.Tk()
+root.withdraw()
+root.title("EngiHelp")
+
+# Извлечение иконки и применение к окну
+icon_path = extract_icon_to_temp()
+if icon_path:
+    root.iconbitmap(icon_path)  # Применяем иконку к главному окну
+
+# Размеры главного окна
+WINDOW_WIDTH = 389
+WINDOW_HEIGHT = 465
+WINDOW_OFFSET_X = 230
+WINDOW_OFFSET_Y = 140
+
+# Центрирование окна
+screen_width = root.winfo_screenwidth()
+screen_height = root.winfo_screenheight()
+cursor_x = root.winfo_pointerx()
+cursor_y = root.winfo_pointery()
+x = max(0, min(screen_width - WINDOW_WIDTH, cursor_x - WINDOW_OFFSET_X))
+y = max(0, min(screen_height - WINDOW_HEIGHT, cursor_y - WINDOW_OFFSET_Y))
+
+root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
+
+notebook = ttk.Notebook(root)
+notebook.pack(fill="both", expand=True)
+
+settings_tab = tk.Frame(notebook)
+notebook.add(settings_tab, text="Параметры")
 
 # =================== Работа с config.json (мульти-пути) =============
 def load_config_paths():
@@ -302,52 +364,6 @@ def run_update_usesql_value(value):
     if not success:
         messagebox.showwarning("Ошибка", "Не удалось обновить UseSQL в rk7srv.INI")
 
-# Функция для извлечения иконки из .exe и сохранения во временную папку
-def extract_icon_to_temp():
-    # Получаем путь к текущему .exe файлу
-    exe_path = sys.executable
-    
-    # Указываем путь, куда извлечем иконку
-    temp_dir = tempfile.gettempdir()
-    icon_path = os.path.join(temp_dir, "Иконка EngiHelp.ico")
-    
-    # Проверяем, если иконка уже существует, не извлекаем заново
-    if not os.path.exists(icon_path):
-        try:
-            # Скопируем иконку из .exe в временную папку
-            with open(icon_path, "wb") as icon_file:
-                # Открываем файл .exe и ищем иконку (этот шаг можно адаптировать под конкретный случай)
-                shutil.copyfile(exe_path, icon_path)
-        except Exception as e:
-            print(f"Не удалось извлечь иконку: {e}")
-            return None
-    
-    return icon_path
-
-# === GUI ===
-root = tk.Tk()
-# Извлечение иконки и применение к окну
-icon_path = extract_icon_to_temp()
-if icon_path:
-    root.iconbitmap(icon_path)  # Применяем иконку к главному окну
-root.title("EngiHelp")
-root.geometry("372x465")
-
-# Центрирование окна
-screen_width = root.winfo_screenwidth()
-screen_height = root.winfo_screenheight()
-cursor_x = root.winfo_pointerx()
-cursor_y = root.winfo_pointery()
-x = max(0, min(screen_width - 372, cursor_x - 230))
-y = max(0, min(screen_height - 465, cursor_y - 140))
-root.geometry(f"372x465+{x}+{y}")
-
-notebook = ttk.Notebook(root)
-notebook.pack(fill="both", expand=True)
-
-settings_tab = tk.Frame(notebook)
-notebook.add(settings_tab, text="Параметры")
-
 # Выбор пути
 path_frame = tk.Frame(settings_tab)
 path_frame.pack(fill="x", padx=10, pady=(10, 0))
@@ -361,8 +377,6 @@ if ini_paths:
 path_var.trace_add("write", lambda *args: save_config_path(path_var.get()))
 path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
 path_entry.pack(side="left", fill="x", expand=True)
-
-
 
 def browse_path():
     selected = filedialog.askdirectory()
@@ -702,12 +716,29 @@ col3.grid(row=0, column=2, sticky="nw", padx=5, pady=5)
 frame_refsrv_rk7man = tk.Frame(col1)
 frame_refsrv_rk7man.pack(anchor="w", pady=(0, 4))
 
+# Онлайн лог с 200 строками
+def open_log_file(log_name):
+    log_path = os.path.join(ini_path, log_name)
+    cmd = f'start powershell -NoExit -Command "Get-Content \'{log_path}\' -Tail 200 -Wait"'
+    subprocess.Popen(cmd, shell=True)
+
+def open_multiple_logs(*log_names):
+    log_paths = [os.path.join(ini_path, name) for name in log_names]
+    jobs = [f"Start-job {{ Get-Content -Path '{p}' -Tail 200 -Wait }}" for p in log_paths]
+    cmd = " ; ".join(jobs) + "; Receive-Job -Wait -AutoremoveJob *"
+    full_cmd = f'start powershell -NoExit -Command \"{cmd}\"'
+    subprocess.Popen(full_cmd, shell=True)
+
 # Кнопка Refsrv + RK7man
 tk.Button(frame_refsrv_rk7man, text="Refsrv + RK7man", command=run_refsrv_and_rk7man, width=15)\
     .pack(side="left")
 
+tk.Button(frame_refsrv_rk7man, text="📄", command=lambda: open_multiple_logs("refsrv.stk", "rk7man.stk"), width=3)\
+    .pack(side="left")
+
+
 # Кнопка Close для Refsrv + RK7man
-tk.Button(frame_refsrv_rk7man, text="Close", command=lambda: kill_refsrv_process() or kill_rk7man_process(), width=5)\
+tk.Button(frame_refsrv_rk7man, text="❌", command=lambda: kill_refsrv_process() or kill_rk7man_process(), width=2)\
     .pack(side="left")
 
 # Создаем фрейм для MidServ + WinCash
@@ -718,8 +749,11 @@ frame_midserv_wincash.pack(anchor="w", pady=(0, 4))
 tk.Button(frame_midserv_wincash, text="MidServ + WinCash", command=run_midserv_and_wincash, width=15)\
     .pack(side="left")
 
+tk.Button(frame_midserv_wincash, text="📄", command=lambda: open_multiple_logs("midsrv.stk", "cash.stk"), width=3)\
+    .pack(side="left")
+
 # Кнопка Close для MidServ + WinCash
-tk.Button(frame_midserv_wincash, text="Close", command=lambda: kill_midserv_process() or kill_doscash_process(), width=5)\
+tk.Button(frame_midserv_wincash, text="❌", command=lambda: kill_midserv_process() or kill_doscash_process(), width=2)\
     .pack(side="left")
 
 # Строка 1: одиночные кнопки
@@ -731,8 +765,11 @@ frame_refsrv.pack(anchor="w", pady=2)
 tk.Button(frame_refsrv, text="Refsrv", command=lambda: run_or_restart_process("refsrv.exe"), width=15)\
     .pack(side="left")
 
+tk.Button(frame_refsrv, text="📄", command=partial(open_log_file, "refsrv.stk"), width=3)\
+    .pack(side="left")
+
 # Кнопка Close для Refsrv
-tk.Button(frame_refsrv, text="Close", command=kill_refsrv_process, width=5)\
+tk.Button(frame_refsrv, text="❌", command=kill_refsrv_process, width=2)\
     .pack(side="left")
 
 # Создаем фрейм для RK7man
@@ -743,8 +780,11 @@ frame_rk7man.pack(anchor="w", pady=2)
 tk.Button(frame_rk7man, text="RK7man", command=run_rk7man, width=15)\
     .pack(side="left")
 
+tk.Button(frame_rk7man, text="📄", command=partial(open_log_file, "rk7man.stk"), width=3)\
+    .pack(side="left")
+
 # Кнопка Close для RK7man
-tk.Button(frame_rk7man, text="Close", command=kill_rk7man_process, width=5)\
+tk.Button(frame_rk7man, text="❌", command=kill_rk7man_process, width=2)\
     .pack(side="left")
 
 # Строка 2: одиночные кнопки
@@ -756,8 +796,11 @@ frame_midserv.pack(anchor="w", pady=2)  # Размещаем фрейм с вы�
 tk.Button(frame_midserv, text="MidServ", command=lambda: run_or_restart_process("midserv.exe"), width=15)\
     .pack(side="left")  # Кнопка расположена слева в фрейме
 
+tk.Button(frame_midserv, text="📄", command=partial(open_log_file, "midsrv.stk"), width=3)\
+    .pack(side="left")
+
 # Кнопка Close для MidServ
-tk.Button(frame_midserv, text="Close", command=kill_midserv_process, width=5)\
+tk.Button(frame_midserv, text="❌", command=kill_midserv_process, width=2)\
     .pack(side="left")  # Кнопка расположена справа в том же фрейме
 
 # Создаем фрейм для WinCash
@@ -768,8 +811,11 @@ frame_win_cash.pack(anchor="w", pady=2)  # Размещаем фрейм с вы
 tk.Button(frame_win_cash, text="WinCash", command=run_wincash_bat, width=15)\
     .pack(side="left")  # Кнопка расположена слева в фрейме
 
+tk.Button(frame_win_cash, text="📄", command=partial(open_log_file, "cash.stk"), width=3)\
+    .pack(side="left")
+
 # Кнопка Close для WinCash
-tk.Button(frame_win_cash, text="Close", command=kill_doscash_process, width=5)\
+tk.Button(frame_win_cash, text="❌", command=kill_doscash_process, width=2)\
     .pack(side="left")  # Кнопка расположена справа в том же фрейме
 
 
@@ -990,6 +1036,7 @@ def update_every_1_seconds():
 root.after(1000, update_every_1_seconds)
 
 on_check()
+root.deiconify()
 root.mainloop()
 
 # pyinstaller --onefile --windowed --icon="иконка EngiHelp.ico" EngiHelp.py
