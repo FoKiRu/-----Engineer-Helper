@@ -56,7 +56,7 @@ if not check_gitignore_status():
 print("Программа запускается.")
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.7.7"
+SCRIPT_VERSION = "v0.7.8"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -1023,9 +1023,29 @@ def get_short_path_name(long_path):
 
 # Проверка версии
 def check_for_updates():
+    url_exe = "https://github.com/FoKiRu/-----Engineer-Helper/raw/main/dist/EngiHelp.exe"
+    url_py = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/EngiHelp.py"
+
     try:
-        url = "https://github.com/FoKiRu/-----Engineer-Helper/raw/main/dist/EngiHelp.exe"
-        response = requests.get(url, timeout=10)
+        # Получаем версию из исходника
+        version_response = requests.get(url_py, timeout=5)
+        version_response.raise_for_status()
+
+        match = re.search(r'SCRIPT_VERSION\s*=\s*"v([\d.]+)"', version_response.text)
+        if not match:
+            messagebox.showwarning("Ошибка", "Не удалось определить версию на GitHub.")
+            return
+
+        remote_version = f"v{match.group(1)}"
+        if remote_version == SCRIPT_VERSION:
+            messagebox.showinfo("Актуальная версия", f"Установлена последняя версия: {SCRIPT_VERSION}")
+            return
+
+        # Предложение скачать обновление
+        if not messagebox.askyesno("Обновление", f"Доступна новая версия: {remote_version}\nОбновить сейчас?"):
+            return
+        
+        response = requests.get(url_exe, timeout=10)
         response.raise_for_status()
 
         temp_dir = tempfile.gettempdir()
