@@ -11,7 +11,8 @@
 /Cloud_online_logs.mp4
 wincash.ini
 /build
-/dist
+/dist/config.json
+/dist/StackDmp.txt
 /EngiHelp.spec
 /Иконка EngiHelp.png
 /Иконка EngiHelp.ico

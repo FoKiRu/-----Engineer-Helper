@@ -102,7 +102,7 @@ def extract_icon_to_temp():
 # === GUI ===
 root = tk.Tk()
 root.withdraw()
-root.title("EngiHelp")
+root.title(f"EngiHelp {SCRIPT_VERSION}")
 
 # Извлечение иконки и применение к окну
 icon_path = extract_icon_to_temp()
@@ -1015,14 +1015,35 @@ show_folders_btn.pack(side="left", padx=5, fill="x", expand=True)  # fill="x" и
 clear_base_btn = tk.Button(check_folder_frame, text="Clear Base", command=delete_unwanted_files)
 clear_base_btn.pack(side="left", padx=5, fill="x", expand=True)  # fill="x" и expand=True для равномерного распределения
 
+# Проверка версии
+def check_for_updates():
+    url = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/EngiHelp.py"
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        match = re.search(r'SCRIPT_VERSION\s*=\s*"v([\d.]+)"', response.text)
+        if match:
+            remote_version = f"v{match.group(1)}"
+            if remote_version != SCRIPT_VERSION:
+                messagebox.showinfo("Обновление доступно", f"Доступна новая версия: {remote_version}\nТекущая: {SCRIPT_VERSION}")
+            else:
+                messagebox.showinfo("Актуальная версия", f"Вы используете последнюю версию: {SCRIPT_VERSION}")
+        else:
+            messagebox.showwarning("Ошибка", "Не удалось определить версию на GitHub.")
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось проверить обновление:\n{e}")
 
 # Info tab
 info_tab = tk.Frame(notebook)
 notebook.add(info_tab, text="О программе")
+
 info_label = tk.Label(info_tab, text=f"{DESCRIPTION}\n{AUTHOR}\n{EMAIL}\n{SCRIPT_VERSION}", justify="left", anchor="nw")
 info_label.pack(padx=10, pady=10, anchor="nw", fill="both", expand=True)
 info_label.bind('<Configure>', lambda e: info_label.config(wraplength=e.width - 20))
 
+# Кнопка проверки обновления
+tk.Button(info_tab, text="Проверить обновление", command=check_for_updates)\
+    .pack(padx=10, pady=(0, 10), anchor="w")
 
 def update_every_1_seconds():
     # Обновляем информацию о WinCash и RKEEPER по приоритету
