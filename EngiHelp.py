@@ -16,6 +16,7 @@ import logging
 import requests
 import sys
 import tempfile
+import ctypes
 from PyInstaller.utils.hooks import collect_data_files
 from functools import partial
 
@@ -1015,47 +1016,56 @@ show_folders_btn.pack(side="left", padx=5, fill="x", expand=True)  # fill="x" и
 clear_base_btn = tk.Button(check_folder_frame, text="Clear Base", command=delete_unwanted_files)
 clear_base_btn.pack(side="left", padx=5, fill="x", expand=True)  # fill="x" и expand=True для равномерного распределения
 
+def get_short_path_name(long_path):
+    buf = ctypes.create_unicode_buffer(260)
+    ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, 260)
+    return buf.value
+
 # Проверка версии
 def check_for_updates():
-    url_exe = "https://github.com/FoKiRu/-----Engineer-Helper/raw/main/dist/EngiHelp.exe"
     try:
-        response = requests.get(url_exe, timeout=10)
+        url = "https://github.com/FoKiRu/-----Engineer-Helper/raw/main/dist/EngiHelp.exe"
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
 
-        # Сохраняем новую версию во временную папку
         temp_dir = tempfile.gettempdir()
         temp_exe = os.path.join(temp_dir, "EngiHelp_updated.exe")
         with open(temp_exe, "wb") as f:
             f.write(response.content)
 
-        # Путь к текущему exe
         current_exe = sys.executable
+        short_exe = get_short_path_name(current_exe)
+        bat_path = os.path.join(temp_dir, "restart_engihelp.bat")
 
-        # Путь к .bat-файлу, который заменит и запустит новую версию
-        updater_bat = os.path.join(temp_dir, "update_engihelp.bat")
-
-        # Создаём батник
-        with open(updater_bat, "w", encoding="cp1251") as f:
+        with open(bat_path, "w", encoding="utf-8") as f:
             f.write(f"""@echo off
-timeout /t 2 >nul
-:waitloop
-tasklist | find /i "{os.path.basename(current_exe)}" >nul
-if not errorlevel 1 (
-    timeout /t 1 >nul
-    goto waitloop
-)
-copy /y "{temp_exe}" "{current_exe}"
-start "" "{current_exe}"
-del "{updater_bat}"
-""")
+        chcp 65001 >nul
+        echo Обновление завершено.
+        echo Ожидание завершения старой версии...
+        :waitloop
+        tasklist | find /i "{os.path.basename(short_exe)}" >nul
+        if not errorlevel 1 (
+            timeout /t 1 >nul
+            goto waitloop
+        )
 
-        # Запускаем .bat и закрываем текущее приложение
-        subprocess.Popen(['cmd', '/c', 'start', '', updater_bat], shell=True)
+        echo Замена файла...
+        copy /y "{temp_exe}" "{short_exe}"
+
+        start "" "{short_exe}"
+
+        echo Запуск новой версии примерно через:
+        for /l %%i in (8,-1,1) do (
+            echo %%i...
+            timeout /t 1 >nul
+        )
+        """)
+            
+        subprocess.Popen(['cmd', '/c', bat_path], shell=False)
         root.destroy()
 
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось обновить:\n{e}")
-
 
 # Info tab
 info_tab = tk.Frame(notebook)
