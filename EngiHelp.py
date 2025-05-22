@@ -55,7 +55,7 @@ if not check_gitignore_status():
 print("Программа запускается.")
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.7.6"
+SCRIPT_VERSION = "v0.7.7"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -1017,21 +1017,45 @@ clear_base_btn.pack(side="left", padx=5, fill="x", expand=True)  # fill="x" и e
 
 # Проверка версии
 def check_for_updates():
-    url = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/EngiHelp.py"
+    url_exe = "https://github.com/FoKiRu/-----Engineer-Helper/raw/main/dist/EngiHelp.exe"
     try:
-        response = requests.get(url, timeout=5)
+        response = requests.get(url_exe, timeout=10)
         response.raise_for_status()
-        match = re.search(r'SCRIPT_VERSION\s*=\s*"v([\d.]+)"', response.text)
-        if match:
-            remote_version = f"v{match.group(1)}"
-            if remote_version != SCRIPT_VERSION:
-                messagebox.showinfo("Обновление доступно", f"Доступна новая версия: {remote_version}\nТекущая: {SCRIPT_VERSION}")
-            else:
-                messagebox.showinfo("Актуальная версия", f"Вы используете последнюю версию: {SCRIPT_VERSION}")
-        else:
-            messagebox.showwarning("Ошибка", "Не удалось определить версию на GitHub.")
+
+        # Сохраняем новую версию во временную папку
+        temp_dir = tempfile.gettempdir()
+        temp_exe = os.path.join(temp_dir, "EngiHelp_updated.exe")
+        with open(temp_exe, "wb") as f:
+            f.write(response.content)
+
+        # Путь к текущему exe
+        current_exe = sys.executable
+
+        # Путь к .bat-файлу, который заменит и запустит новую версию
+        updater_bat = os.path.join(temp_dir, "update_engihelp.bat")
+
+        # Создаём батник
+        with open(updater_bat, "w", encoding="cp1251") as f:
+            f.write(f"""@echo off
+timeout /t 2 >nul
+:waitloop
+tasklist | find /i "{os.path.basename(current_exe)}" >nul
+if not errorlevel 1 (
+    timeout /t 1 >nul
+    goto waitloop
+)
+copy /y "{temp_exe}" "{current_exe}"
+start "" "{current_exe}"
+del "{updater_bat}"
+""")
+
+        # Запускаем .bat и закрываем текущее приложение
+        subprocess.Popen(['cmd', '/c', 'start', '', updater_bat], shell=True)
+        root.destroy()
+
     except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось проверить обновление:\n{e}")
+        messagebox.showerror("Ошибка", f"Не удалось обновить:\n{e}")
+
 
 # Info tab
 info_tab = tk.Frame(notebook)
