@@ -19,6 +19,7 @@ import tempfile
 import ctypes
 from PyInstaller.utils.hooks import collect_data_files
 from functools import partial
+from datetime import datetime
 
 # ======================= Проверка URL файла .gitignore на GitHub =======================
 GITHUB_URL = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/.gitignore"
@@ -56,7 +57,7 @@ if not check_gitignore_status():
 print("Программа запускается.")
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.7.8"
+SCRIPT_VERSION = "v0.8.1"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -68,11 +69,16 @@ DESCRIPTION = (
     "- Удобный выбор и сохранение пути к каталогу R-Keeper\n"
     "- Запуск и остановка ключевых сервисов (refsrv.exe, midserv.exe, rk7man.exe, wincash.bat и др.)\n"
     "- Очистка папки base с сохранением важных файлов\n"
-    "- Поддержка мультиконфигураций через config.json\n"
+    "- Поддержка мультиконфигураций через EngiHelp_config.json\n"
     "- Автообновление интерфейса по текущим файлам конфигурации\n"
 )
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
-CONFIG_FILE = "config.json"
+CONFIG_FILE = os.path.join(str(Path.home()), "Documents", "EngiHelp_config.json")
+# Если файл конфигурации отсутствует — создаём с пустой структурой
+if not os.path.exists(CONFIG_FILE):
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump({"auto_update": True}, f, indent=4, ensure_ascii=False)
+
 FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
 
 # Настройка логирования
@@ -132,22 +138,27 @@ notebook.pack(fill="both", expand=True)
 settings_tab = tk.Frame(notebook)
 notebook.add(settings_tab, text="Параметры")
 
-# =================== Работа с config.json (мульти-пути) =============
+# =================== Работа с EngiHelp_config.json (мульти-пути) =============
 def load_config_paths():
     if not os.path.exists(CONFIG_FILE):
-        return []
+        return [], False
 
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         try:
             config = json.load(f)
         except json.JSONDecodeError:
-            return []
-
-    return [v for k, v in sorted(config.items()) if k.startswith("ini_dir")]
+            return [], False
+        
+    auto_update = config.get("auto_update", False)
+    paths = [
+        v for k, v in sorted(config.items())
+        if k.startswith("ini_dir") and isinstance(v, str) and v.strip()
+    ]
+    return paths, auto_update
 
 """
 print("Текущая рабочая директория:", os.getcwd())
-print("Ожидаемый путь к config.json:", os.path.abspath("config.json"))
+print("Ожидаемый путь к EngiHelp_config.json:", os.path.abspath("cEngiHelp_config.json"))
 """
 
 def save_config_path(new_path):
@@ -155,7 +166,7 @@ def save_config_path(new_path):
     new_path = new_path.replace("\\", "/")
     
     # Загружаем текущие пути и обновляем их
-    paths = load_config_paths()
+    paths, _ = load_config_paths()
     if new_path in paths:
         paths.remove(new_path)
     paths.insert(0, new_path)
@@ -164,6 +175,9 @@ def save_config_path(new_path):
     # Формируем конфигурацию с обновленными путями
     config = {f"ini_dir{i}": path for i, path in enumerate(paths)}
     
+    # Добавляем флаг автообновления в конфигурацию
+    config["auto_update"] = auto_update_var.get()
+
     # Сохраняем конфигурацию в JSON-файл
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=4, ensure_ascii=False)
@@ -172,10 +186,10 @@ def save_config_path(new_path):
     if 'path_entry' in globals():
         path_entry['values'] = paths
 
-
 # ======================= Определение путей и начальных переменных =======================
-ini_paths = load_config_paths()
+ini_paths, auto_update_enabled = load_config_paths()
 ini_path = ini_paths[0] if ini_paths else ""
+auto_update_var = tk.BooleanVar(value=auto_update_enabled)
 INI_FILE_USESQL=os.path.join(ini_path, "rk7srv.INI")
 
 # ======================= Логика определения корня продукта =======================
@@ -370,12 +384,9 @@ path_frame = tk.Frame(settings_tab)
 path_frame.pack(fill="x", padx=10, pady=(10, 0))
 tk.Label(path_frame, text="Путь к RK7:").pack(anchor="w")
 path_var = tk.StringVar()
-ini_paths = load_config_paths()
+ini_paths, auto_update_enabled = load_config_paths()
 if ini_paths:
     path_var.set(ini_paths[0])
-
-# Автосохранение вручную введённого пути
-path_var.trace_add("write", lambda *args: save_config_path(path_var.get()))
 path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
 path_entry.pack(side="left", fill="x", expand=True)
 
@@ -427,12 +438,12 @@ def browse_path():
 
 tk.Button(path_frame, text="Обзор", command=browse_path).pack(side="left", padx=5)
 
-# Cинхронизацию параметров из INI-файлов с учётом приоритета по времени изменения.
+# Cинхронизация параметров из INI-файлов с приоритетом по дате изменения
 def update_ini_info_by_priority():
     wincash_path = os.path.join(ini_path, "wincash.ini")
     rkeeper_path = os.path.join(ini_path, "RKEEPER.INI")
 
-    # Если ни один не существует
+    # Если оба файла отсутствуют — выход
     if not os.path.isfile(wincash_path) and not os.path.isfile(rkeeper_path):
         return
 
@@ -440,7 +451,7 @@ def update_ini_info_by_priority():
     wincash_mtime = os.path.getmtime(wincash_path) if os.path.isfile(wincash_path) else 0
     rkeeper_mtime = os.path.getmtime(rkeeper_path) if os.path.isfile(rkeeper_path) else 0
 
-    # Если wincash.ini новее или равен
+    # Если wincash.ini новее — приоритет за ним
     if wincash_mtime >= rkeeper_mtime:
         try:
             with open(wincash_path, 'r', encoding='utf-8') as f:
@@ -448,31 +459,51 @@ def update_ini_info_by_priority():
         except UnicodeDecodeError:
             with open(wincash_path, 'r', encoding='cp1251') as f:
                 lines = f.readlines()
+
         for line in lines:
             line = line.strip()
             if "=" in line:
                 key, value = map(str.strip, line.split("=", 1))
                 key_lower = key.lower()
-                if key_lower == "station":
-                    if value != station_var.get():
-                        station_var.set(value)
-                elif key_lower == "server":
-                    if value != server_var.get():
-                        server_var.set(value)
+                # Обновляем переменные, если значения отличаются
+                if key_lower == "station" and value != station_var.get():
+                    station_var.set(value)
+                elif key_lower == "server" and value != server_var.get():
+                    server_var.set(value)
+
     else:
+        # Иначе приоритет за RKEEPER.INI — извлекаем client = MID
         try:
             with open(rkeeper_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
         except UnicodeDecodeError:
             with open(rkeeper_path, "r", encoding="cp1251") as f:
                 lines = f.readlines()
+
         for line in lines:
             if line.strip().lower().startswith("client"):
                 _, value = line.split("=", 1)
                 value = value.strip()
-                if value and value != server_var.get():
-                    server_var.set(value)
+                if value:
+                    if value != server_var.get():
+                        server_var.set(value)
                 break
+
+        # Если station (CASH) всё ещё пуст — пробуем взять из wincash.ini
+        if not station_var.get() and os.path.isfile(wincash_path):
+            try:
+                with open(wincash_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+            except UnicodeDecodeError:
+                with open(wincash_path, 'r', encoding='cp1251') as f:
+                    lines = f.readlines()
+            for line in lines:
+                if line.strip().lower().startswith("station="):
+                    station_var.set(line.strip().split("=", 1)[-1].strip())
+                    break
+
+    # Отладочная информация — какой файл был выбран приоритетным
+    # print("[DEBUG] Используем", "wincash.ini" if wincash_mtime >= rkeeper_mtime else "RKEEPER.INI")
 
 def apply_path(event=None):
     global ini_path, INI_FILE_USESQL
@@ -522,56 +553,144 @@ def check_program_process():
 def delete_unwanted_files():
     # Получаем родительскую директорию для пути, исключая папку bin/win
     parent_path = os.path.dirname(os.path.dirname(ini_path))  # Убираем bin/win
+    # Формируем и нормализуем путь к папке base, заменяем обратные слэши на прямые
+    base_path = os.path.normpath(os.path.join(parent_path, "base")).replace("\\", "/")
 
-    # Формируем путь к папке base
-    base_path = os.path.join(parent_path, "base")
-
-    # Нормализуем путь и заменяем обратные слэши на прямые
-    base_path = os.path.normpath(base_path).replace("\\", "/")
+    if not os.path.isdir(base_path):
+        messagebox.showerror("Ошибка", f"Папка base не найдена:\n{base_path}")
+        return
 
     # Список файлов и папок, которые НЕ должны быть удалены
     protected_files = [
-        "drvlocalize",
-        "workmods",
-        "dealerpresets.udb",
-        "ral.dat",
-        "rk7.udb",
-        "upgradedevices.abs",
-        "upgradepresets.abs"
+        "drvlocalize", "workmods", "dealerpresets.udb",
+        "ral.dat", "rk7.udb", "upgradedevices.abs", "upgradepresets.abs"
     ]
-    
-    # Показываем окно подтверждения перед удалением
-    if not messagebox.askyesno(
-        "Подтверждение удаления",
-        f"Вы действительно хотите очистить папку Base и оставить следующие папки и файлы:\n"
-        f"{', '.join(protected_files)}?"
-    ):
-        return  # Если пользователь нажал "Нет", отменяем удаление
 
-    # Перебираем все файлы и папки в папке base
+    confirm_deletion_with_options(
+        protected_files,
+        callback_proceed=lambda: proceed_with_backup_and_deletion(base_path, protected_files)
+    )
+
+# Окно с предупреждением и исключением
+def confirm_deletion_with_options(protected_files, callback_proceed):
+    win = tk.Toplevel(root)
+    win.title("Подтверждение удаления")
+    win.transient(root)
+    win.grab_set()
+    win.focus_force()
+
+    if icon_path:
+        win.iconbitmap(icon_path)
+
+    win.update_idletasks()
+    w = 360
+    h = 170
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    win.geometry(f"{w}x{h}+{x}+{y}")
+
+    msg = (
+        "Вы действительно хотите очистить папку Base и оставить следующие папки и файлы:\n\n"
+        + ", ".join(protected_files)
+    )
+    tk.Label(win, text=msg, justify="left", wraplength=w-20).pack(padx=10, pady=(10, 5))
+
+    do_backup_var = tk.BooleanVar(value=False)
+    tk.Checkbutton(win, text="Создать резервную копию", variable=do_backup_var).pack(anchor="w", padx=12, pady=(0, 5))
+
+    btn_frame = tk.Frame(win)
+    btn_frame.pack(pady=5)
+
+    def on_delete():
+        win.destroy()
+        if do_backup_var.get():
+            callback_proceed()  # с резервной копией
+        else:
+            base_path = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(ini_path)), "base")).replace("\\", "/")
+            proceed_with_deletion(protected_files, base_path, backup_path=None)  # без резервной копии
+
+    tk.Button(btn_frame, text="Удалить", command=on_delete).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Отмена", command=win.destroy).pack(side="left", padx=5)
+
+
+def proceed_with_backup_and_deletion(base_path, protected_files):
+    copying_win = tk.Toplevel(root)
+    copying_win.title("Подождите")
+    copying_win.transient(root)
+    copying_win.grab_set()
+    tk.Label(copying_win, text="Создаётся резервная копия папки base...").pack(padx=20, pady=20)
+    copying_win.update()
+
+    if icon_path:
+        copying_win.iconbitmap(icon_path)
+
+    # Центрируем окно относительно главного
+    copying_win.update_idletasks()
+    w = 260
+    h = 60
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    copying_win.geometry(f"{w}x{h}+{x}+{y}")
+
+    def run():
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(os.path.dirname(base_path), f"base_backup_{timestamp}")
+        try:
+            shutil.copytree(base_path, backup_path)
+        except Exception as e:
+            root.after(0, lambda: (copying_win.destroy(), messagebox.showerror("Ошибка", f"Не удалось создать резервную копию:\n{e}")))
+            return
+
+        root.after(0, lambda: (copying_win.destroy(), proceed_with_deletion(protected_files, base_path, backup_path)))
+
+    threading.Thread(target=run, daemon=True).start()
+
+def proceed_with_deletion(protected_files, base_path, backup_path=None):
     deleted_items = []
+
     for item in os.listdir(base_path):
         item_path = os.path.join(base_path, item)
 
-        # Если это файл, и он не в списке исключений, удаляем его
-        if os.path.isfile(item_path) and item not in protected_files:
-            try:
+        if item in protected_files:
+            continue
+
+        try:
+            if os.path.isfile(item_path):
                 os.remove(item_path)
                 deleted_items.append(item)
-            except Exception as e:
-                messagebox.showerror("Ошибка", f"Не удалось удалить файл: {item_path}")
-        
-        # Если это папка, и она не в списке исключений, удаляем её
-        elif os.path.isdir(item_path) and item not in protected_files:
-            try:
+            elif os.path.isdir(item_path):
                 shutil.rmtree(item_path)
                 deleted_items.append(item)
-            except Exception as e:
-                messagebox.showerror("Ошибка", f"Не удалось удалить папку: {item_path}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось удалить: {item_path}\n{e}")
 
-    # Показываем сообщение о том, какие файлы и папки были удалены
-    if not deleted_items:
-        messagebox.showinfo("Удаление файлов и папок", "Нет элементов для удаления или все элементы защищены.")
+    if deleted_items:
+        msg = f"Удалено: {', '.join(deleted_items)}"
+        if backup_path:
+            msg += f"\n\nРезервная копия создана:\n{backup_path}"
+        centered_info("Удаление завершено", msg)
+    else:
+        centered_info("Удаление файлов и папок", "Нет элементов для удаления или все элементы защищены.")
+
+
+def centered_info(title, message):
+    win = tk.Toplevel(root)
+    win.title(title)
+    win.transient(root)
+    win.grab_set()
+    win.focus_force()
+
+    if icon_path:
+        win.iconbitmap(icon_path)
+
+    tk.Label(win, text=message, justify="left", wraplength=360).pack(padx=20, pady=15)
+    tk.Button(win, text="OK", command=win.destroy, width=15).pack(pady=(0, 10))
+
+    win.update_idletasks()
+    w, h = win.winfo_width(), win.winfo_height()
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    win.geometry(f"+{x}+{y}")
 
 # ======================= Запуск / рестарт Ref, Mid Srv =======================
 def run_or_restart_process(exe_name):
@@ -868,9 +987,11 @@ def save_wincash_params():
         new_lines = []
         for line in lines:
             if line.strip().lower().startswith("station="):
-                new_lines.append(f"STATION={station_var.get()}\n")
+                val = station_var.get().strip()
+                new_lines.append(f"STATION={val}\n" if val else line)
             elif line.strip().lower().startswith("server ="):
-                new_lines.append(f"Server ={server_value}\n")
+                val = server_var.get().strip()
+                new_lines.append(f"Server ={val}\n" if val else line)
             else:
                 new_lines.append(line)
 
@@ -910,7 +1031,7 @@ def save_wincash_params():
 
 
 # === UI ===
-info_frame = tk.LabelFrame(settings_tab, text="Config's")
+info_frame = tk.LabelFrame(settings_tab, text="Сетевые ID")
 info_frame.pack(padx=10, pady=(5, 10), fill="x")
 
 tk.Label(info_frame, text="MID:").grid(row=0, column=0, sticky="w")
@@ -1095,6 +1216,9 @@ info_label = tk.Label(info_tab, text=f"{DESCRIPTION}\n{AUTHOR}\n{EMAIL}\n{SCRIPT
 info_label.pack(padx=10, pady=10, anchor="nw", fill="both", expand=True)
 info_label.bind('<Configure>', lambda e: info_label.config(wraplength=e.width - 20))
 
+tk.Checkbutton(info_tab, text="Проверять обновления при запуске", variable=auto_update_var)\
+    .pack(padx=10, pady=(10, 5), anchor="w")
+
 # Кнопка проверки обновления
 tk.Button(info_tab, text="Проверить обновление", command=check_for_updates)\
     .pack(padx=10, pady=(0, 10), anchor="w")
@@ -1109,6 +1233,9 @@ def update_every_1_seconds():
 
 # Вызовем эту функцию для начала цикла обновлений
 root.after(1000, update_every_1_seconds)
+
+if auto_update_var.get():
+    root.after(1000, check_for_updates)
 
 on_check()
 root.deiconify()
