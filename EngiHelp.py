@@ -21,6 +21,30 @@ from PyInstaller.utils.hooks import collect_data_files
 from functools import partial
 from datetime import datetime
 
+# ======================= Константы и настройки =======================
+SCRIPT_VERSION = "v0.8.2"
+AUTHOR = "Автор: Кирилл Рутенко"
+EMAIL = "Эл. почта: xkiladx@gmail.com"
+DESCRIPTION = (
+    "EngiHelp — инструмент для работы с INI-файлами R-Keeper.\n"
+    "Возможности:\n"
+    "- Управление UseDBSync и UseSQL в INI-файлах\n"
+    "- Автоматическая синхронизация параметров Station и Server из wincash.ini и RKEEPER.INI с учётом времени изменений\n"
+    "- Проверка и копирование необходимых INI-файлов\n"
+    "- Удобный выбор и сохранение пути к каталогу R-Keeper\n"
+    "- Запуск и остановка ключевых сервисов (refsrv.exe, midserv.exe, rk7man.exe, wincash.bat и др.)\n"
+    "- Очистка папки base с сохранением важных файлов\n"
+    "- Поддержка мультиконфигураций через EngiHelp_config.json\n"
+    "- Автообновление интерфейса по текущим файлам конфигурации\n"
+)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
+CONFIG_FILE = os.path.join(str(Path.home()), "Documents", "EngiHelp_config.json")
+# Если файл конфигурации отсутствует — создаём с пустой структурой
+if not os.path.exists(CONFIG_FILE):
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump({"auto_update": True}, f, indent=4, ensure_ascii=False)
+FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
+
 # ======================= Проверка URL файла .gitignore на GitHub =======================
 GITHUB_URL = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/.gitignore"
 
@@ -55,31 +79,6 @@ if not check_gitignore_status():
 
 # Если первая строка в .gitignore равна "0", продолжаем выполнение программы
 print("Программа запускается.")
-
-# ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.8.1"
-AUTHOR = "Автор: Кирилл Рутенко"
-EMAIL = "Эл. почта: xkiladx@gmail.com"
-DESCRIPTION = (
-    "EngiHelp — инструмент для работы с INI-файлами R-Keeper.\n"
-    "Возможности:\n"
-    "- Управление UseDBSync и UseSQL в INI-файлах\n"
-    "- Автоматическая синхронизация параметров Station и Server из wincash.ini и RKEEPER.INI с учётом времени изменений\n"
-    "- Проверка и копирование необходимых INI-файлов\n"
-    "- Удобный выбор и сохранение пути к каталогу R-Keeper\n"
-    "- Запуск и остановка ключевых сервисов (refsrv.exe, midserv.exe, rk7man.exe, wincash.bat и др.)\n"
-    "- Очистка папки base с сохранением важных файлов\n"
-    "- Поддержка мультиконфигураций через EngiHelp_config.json\n"
-    "- Автообновление интерфейса по текущим файлам конфигурации\n"
-)
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
-CONFIG_FILE = os.path.join(str(Path.home()), "Documents", "EngiHelp_config.json")
-# Если файл конфигурации отсутствует — создаём с пустой структурой
-if not os.path.exists(CONFIG_FILE):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump({"auto_update": True}, f, indent=4, ensure_ascii=False)
-
-FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
 
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -1143,29 +1142,29 @@ def get_short_path_name(long_path):
     return buf.value
 
 # Проверка версии
-def check_for_updates():
+def check_for_updates(silent=False):
     url_exe = "https://github.com/FoKiRu/-----Engineer-Helper/raw/main/dist/EngiHelp.exe"
     url_py = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/EngiHelp.py"
 
     try:
-        # Получаем версию из исходника
         version_response = requests.get(url_py, timeout=5)
         version_response.raise_for_status()
 
         match = re.search(r'SCRIPT_VERSION\s*=\s*"v([\d.]+)"', version_response.text)
         if not match:
-            messagebox.showwarning("Ошибка", "Не удалось определить версию на GitHub.")
+            if not silent:
+                messagebox.showwarning("Ошибка", "Не удалось определить версию на GitHub.")
             return
 
         remote_version = f"v{match.group(1)}"
         if remote_version == SCRIPT_VERSION:
-            messagebox.showinfo("Актуальная версия", f"Установлена последняя версия: {SCRIPT_VERSION}")
+            if not silent:
+                messagebox.showinfo("Актуальная версия", f"Установлена последняя версия: {SCRIPT_VERSION}")
             return
 
-        # Предложение скачать обновление
         if not messagebox.askyesno("Обновление", f"Доступна новая версия: {remote_version}\nОбновить сейчас?"):
             return
-        
+
         response = requests.get(url_exe, timeout=10)
         response.raise_for_status()
 
@@ -1201,12 +1200,13 @@ def check_for_updates():
             timeout /t 1 >nul
         )
         """)
-            
+
         subprocess.Popen(['cmd', '/c', bat_path], shell=False)
         root.destroy()
 
     except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось обновить:\n{e}")
+        if not silent:
+            messagebox.showerror("Ошибка", f"Не удалось обновить:\n{e}")
 
 # Info tab
 info_tab = tk.Frame(notebook)
@@ -1219,8 +1219,8 @@ info_label.bind('<Configure>', lambda e: info_label.config(wraplength=e.width - 
 tk.Checkbutton(info_tab, text="Проверять обновления при запуске", variable=auto_update_var)\
     .pack(padx=10, pady=(10, 5), anchor="w")
 
-# Кнопка проверки обновления
-tk.Button(info_tab, text="Проверить обновление", command=check_for_updates)\
+# Обёртка для ручной проверки через кнопку
+tk.Button(info_tab, text="Проверить обновление", command=lambda: check_for_updates(silent=False))\
     .pack(padx=10, pady=(0, 10), anchor="w")
 
 def update_every_1_seconds():
@@ -1234,8 +1234,9 @@ def update_every_1_seconds():
 # Вызовем эту функцию для начала цикла обновлений
 root.after(1000, update_every_1_seconds)
 
+# Проверка автообновления при старте
 if auto_update_var.get():
-    root.after(1000, check_for_updates)
+    root.after(1000, lambda: check_for_updates(silent=True))
 
 on_check()
 root.deiconify()
