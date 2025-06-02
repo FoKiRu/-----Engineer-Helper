@@ -22,7 +22,7 @@ from functools import partial
 from datetime import datetime
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.8.2"
+SCRIPT_VERSION = "v0.8.3"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -79,6 +79,8 @@ if not check_gitignore_status():
 
 # Если первая строка в .gitignore равна "0", продолжаем выполнение программы
 print("Программа запускается.")
+
+# ==============================================
 
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -549,6 +551,53 @@ def check_program_process():
         messagebox.showwarning("Проверка", "Программа не найдена.")
 """
 
+# ======================= Удаление MIDBASE =======================
+def delete_midbase_files():
+    parent_path = os.path.dirname(os.path.dirname(ini_path))
+    midbase_path = os.path.normpath(os.path.join(parent_path, "MIDBASE")).replace("\\", "/")
+
+    if not os.path.isdir(midbase_path):
+        messagebox.showerror("Ошибка", f"Папка MIDBASE не найдена:\n{midbase_path}")
+        return
+
+    confirm_deletion_midbase(midbase_path)
+
+def confirm_deletion_midbase(midbase_path):
+    win = tk.Toplevel(root)
+    win.title("Подтверждение удаления")
+    win.transient(root)
+    win.grab_set()
+    win.focus_force()
+
+    if icon_path:
+        win.iconbitmap(icon_path)
+
+    win.update_idletasks()
+    w, h = 360, 122
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    win.geometry(f"{w}x{h}+{x}+{y}")
+
+    msg = "Вы действительно хотите удалить всё содержимое папки MIDBASE?"
+    tk.Label(win, text=msg, justify="left", wraplength=w-20).pack(padx=10, pady=(10, 5))
+
+    do_backup_var = tk.BooleanVar(value=False)
+    tk.Checkbutton(win, text="Создать резервную копию", variable=do_backup_var).pack(anchor="w", padx=12, pady=(0, 5))
+
+    btn_frame = tk.Frame(win)
+    btn_frame.pack(pady=5)
+
+    def on_delete():
+        win.destroy()
+        if do_backup_var.get():
+            proceed_with_backup_and_deletion(midbase_path, [])
+        else:
+            proceed_with_deletion([], midbase_path, backup_path=None)
+
+    tk.Button(btn_frame, text="Удалить", command=on_delete).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Отмена", command=win.destroy).pack(side="left", padx=5)
+
+# ======================= Удаление base =======================
 def delete_unwanted_files():
     # Получаем родительскую директорию для пути, исключая папку bin/win
     parent_path = os.path.dirname(os.path.dirname(ini_path))  # Убираем bin/win
@@ -1128,9 +1177,9 @@ check_folder_frame.pack(padx=10, pady=10, anchor="w", fill="x")  # Убедим�
 check_btn = tk.Button(check_folder_frame, text="Проверить файлы", command=on_check_with_message)
 check_btn.pack(side="left", padx=5, fill="x", expand=True)  # fill="x" и expand=True для равномерного распределения
 
-# Кнопка для отображения папок
-show_folders_btn = tk.Button(check_folder_frame, text="Показать папки", command=show_product_folders)
-show_folders_btn.pack(side="left", padx=5, fill="x", expand=True)  # fill="x" и expand=True для равномерного распределения
+# Кнопка для файлов из MIDBASE
+show_folders_btn = tk.Button(check_folder_frame, text="Clear MIDBASE", command=delete_midbase_files)
+show_folders_btn.pack(side="left", padx=5, fill="x", expand=True)
 
 # Кнопка для удаления файла
 clear_base_btn = tk.Button(check_folder_frame, text="Clear Base", command=delete_unwanted_files)
