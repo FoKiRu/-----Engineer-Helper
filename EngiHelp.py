@@ -1,8 +1,13 @@
 # ======================= Импорты =======================
-import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 from pathlib import Path
 from collections import Counter
+from PyInstaller.utils.hooks import collect_data_files
+from functools import partial
+from datetime import datetime
+from ctypes import wintypes
+from packaging import version
+import tkinter as tk
 import os
 import re
 import shutil
@@ -17,12 +22,9 @@ import requests
 import sys
 import tempfile
 import ctypes
-from PyInstaller.utils.hooks import collect_data_files
-from functools import partial
-from datetime import datetime
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.8.3"
+SCRIPT_VERSION = "v0.8.5"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -57,7 +59,6 @@ def check_gitignore_status():
     try:
         response = requests.get(GITHUB_URL)
         response.raise_for_status()  # Проверка на успешный ответ (200)
-
         # Чтение первой строки
         first_line = response.text.splitlines()[0].strip()
 
@@ -115,7 +116,7 @@ root.title(f"EngiHelp {SCRIPT_VERSION}")
 # Извлечение иконки и применение к окну
 icon_path = extract_icon_to_temp()
 if icon_path:
-    root.iconbitmap(icon_path)  # Применяем иконку к главному окну
+   root.iconbitmap(icon_path)  # Применяем иконку к главному окну
 
 # Размеры главного окна
 WINDOW_WIDTH = 389
@@ -516,8 +517,9 @@ def apply_path(event=None):
         return
 
     save_config_path(ini_path)
+    load_wincash_params() # Сначала считываем значения из файлов
     on_check()
-    update_ini_info_by_priority()
+    # update_ini_info_by_priority() Данный вызов создает баг с [Config] STATION= в wincash.ini
 
 path_entry.bind("<<ComboboxSelected>>", apply_path) # Обновление после выбора пути из списка
 
@@ -852,7 +854,6 @@ def kill_refsrv_process():
                 return
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-
 
 def kill_doscash_process():
     # Проходим по всем процессам
@@ -1194,19 +1195,19 @@ def get_short_path_name(long_path):
 def check_for_updates(silent=False):
     url_exe = "https://github.com/FoKiRu/-----Engineer-Helper/raw/main/dist/EngiHelp.exe"
     url_py = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/EngiHelp.py"
-
     try:
         version_response = requests.get(url_py, timeout=5)
         version_response.raise_for_status()
-
         match = re.search(r'SCRIPT_VERSION\s*=\s*"v([\d.]+)"', version_response.text)
         if not match:
             if not silent:
                 messagebox.showwarning("Ошибка", "Не удалось определить версию на GitHub.")
             return
-
         remote_version = f"v{match.group(1)}"
-        if remote_version == SCRIPT_VERSION:
+        current_version = version.parse(SCRIPT_VERSION.lstrip('v'))
+        remote_version = version.parse(remote_version.lstrip('v'))
+
+        if remote_version <= current_version:
             if not silent:
                 messagebox.showinfo("Актуальная версия", f"Установлена последняя версия: {SCRIPT_VERSION}")
             return
@@ -1216,16 +1217,13 @@ def check_for_updates(silent=False):
 
         response = requests.get(url_exe, timeout=10)
         response.raise_for_status()
-
         temp_dir = tempfile.gettempdir()
         temp_exe = os.path.join(temp_dir, "EngiHelp_updated.exe")
         with open(temp_exe, "wb") as f:
             f.write(response.content)
-
         current_exe = sys.executable
         short_exe = get_short_path_name(current_exe)
         bat_path = os.path.join(temp_dir, "restart_engihelp.bat")
-
         with open(bat_path, "w", encoding="utf-8") as f:
             f.write(f"""@echo off
         chcp 65001 >nul
@@ -1237,22 +1235,17 @@ def check_for_updates(silent=False):
             timeout /t 1 >nul
             goto waitloop
         )
-
         echo Замена файла...
         copy /y "{temp_exe}" "{short_exe}"
-
         start "" "{short_exe}"
-
         echo Запуск новой версии примерно через:
         for /l %%i in (8,-1,1) do (
             echo %%i...
             timeout /t 1 >nul
         )
         """)
-
         subprocess.Popen(['cmd', '/c', bat_path], shell=False)
         root.destroy()
-
     except Exception as e:
         if not silent:
             messagebox.showerror("Ошибка", f"Не удалось обновить:\n{e}")
@@ -1291,4 +1284,4 @@ on_check()
 root.deiconify()
 root.mainloop()
 
-# pyinstaller --onefile --windowed --icon="иконка EngiHelp.ico" EngiHelp.py
+# pyinstaller --onefile --windowed --icon=".\.ico\иконка EngiHelp.ico" EngiHelp.py
