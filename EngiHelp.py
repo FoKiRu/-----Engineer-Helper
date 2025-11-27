@@ -24,7 +24,7 @@ import tempfile
 import ctypes
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.8.5"
+SCRIPT_VERSION = "v0.8.7"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -237,11 +237,15 @@ def get_usedbsync_values():
             except UnicodeDecodeError:
                 with open(path, 'r', encoding='cp1251') as file:
                     lines = file.readlines()
+            found = False
             for line in lines:
                 match = re.match(r'^\s*UseDBSync\s*=\s*(\d+)', line, re.IGNORECASE)
                 if match:
                     values[filename] = match.group(1)
+                    found = True
                     break
+            if not found and filename != "rk7srv.INI":
+                values[filename] = "1"
         except Exception:
             continue
     return values
@@ -377,20 +381,89 @@ def run_update(value):
         messagebox.showwarning("Внимание", f"Не удалось обновить: {', '.join(failed)}")
 
 def run_update_usesql_value(value):
-    success = update_ini_file(INI_FILE_USESQL, value, "UseSQL")
+    success = update_ini_file(INI_FILE_USESQL, value, "USESQL")
     if not success:
         messagebox.showwarning("Ошибка", "Не удалось обновить UseSQL в rk7srv.INI")
 
+# Кнопка "Открыть путь"
+def open_explorer_to_root():
+    product_root = find_product_root(path_var.get())
+    if not product_root:
+        messagebox.showwarning("Ошибка", "Не удалось определить корневую папку продукта.")
+        return
+    try:
+        os.startfile(product_root)
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось открыть проводник:\n{e}")
+
+
+# Фрейм для метки, кнопки "Открыть" и поля для номера задачи
+label_and_open_frame = tk.Frame(settings_tab)
+label_and_open_frame.pack(fill="x", padx=10, pady=(10, 0), ipady=0)
+
+# Левая часть: метка "Путь к RK7:" и кнопка "Открыть"
+tk.Label(
+    label_and_open_frame,
+    text="Путь к RK7:",
+    font=("TkDefaultFont", 9)
+).grid(row=0, column=0, sticky="w")
+
+# Кнопка "Открыть" (на той же строке, справа от метки)
+tk.Button(
+    label_and_open_frame,
+    text="Открыть",
+    command=open_explorer_to_root,
+    font=("TkDefaultFont", 8)
+).grid(row=0, column=1, padx=(5, 0), sticky="w")
+
+# Правая часть: текст "Номер задачи:" и поле для ввода
+tk.Label(
+    label_and_open_frame,
+    text="Номер задачи:",
+    font=("TkDefaultFont", 9)
+).grid(row=0, column=2, padx=(20, 5), sticky="e")
+
+task_id_var = tk.StringVar()
+task_id_entry = tk.Entry(
+    label_and_open_frame,
+    textvariable=task_id_var,
+    width=7,
+    font=("TkDefaultFont", 10)
+)
+task_id_entry.grid(row=0, column=3, padx=(0, 0), sticky="w")
+
+
 # Выбор пути
 path_frame = tk.Frame(settings_tab)
-path_frame.pack(fill="x", padx=10, pady=(10, 0))
-tk.Label(path_frame, text="Путь к RK7:").pack(anchor="w")
+path_frame.pack(fill="x", padx=10, pady=(5, 0))
 path_var = tk.StringVar()
 ini_paths, auto_update_enabled = load_config_paths()
 if ini_paths:
     path_var.set(ini_paths[0])
 path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
 path_entry.pack(side="left", fill="x", expand=True)
+
+# Сохранения номера задачи в файл
+def save_task_id():
+    task_id = task_id_var.get()
+    if not task_id:
+        return  # Если поле пустое, ничего не сохраняем
+
+    product_root = find_product_root(path_var.get())
+    if not product_root:
+        messagebox.showerror("Ошибка", "Не удалось определить корневую папку продукта.")
+        return
+
+    task_id_file = os.path.join(product_root, "ID задачи.txt")
+    try:
+        with open(task_id_file, "w", encoding="utf-8") as f:
+            f.write(task_id)
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось сохранить номер задачи:\n{e}")
+
+# Привяжите сохранение к событию изменения текста в поле (опционально)
+task_id_var.trace_add("write", lambda *args: save_task_id())
+
 
 def browse_path():
     selected = filedialog.askdirectory()
@@ -438,7 +511,8 @@ def browse_path():
     path_var.set(os.path.join(product_root, "bin", "win").replace("\\", "/"))
     apply_path()
 
-tk.Button(path_frame, text="Обзор", command=browse_path).pack(side="left", padx=5)
+tk.Button(path_frame, text="Обзор", command=browse_path, font=("TkDefaultFont", 8)).pack(side="left", padx=5)
+
 
 # Cинхронизация параметров из INI-файлов с приоритетом по дате изменения
 def update_ini_info_by_priority():
@@ -523,6 +597,7 @@ def apply_path(event=None):
 
 path_entry.bind("<<ComboboxSelected>>", apply_path) # Обновление после выбора пути из списка
 
+"""
 # Кнопка "Открыть путь"
 def open_explorer_to_root():
     product_root = find_product_root(path_var.get())
@@ -535,6 +610,8 @@ def open_explorer_to_root():
         messagebox.showerror("Ошибка", f"Не удалось открыть проводник:\n{e}")
 
 tk.Button(settings_tab, text="Открыть путь", command=open_explorer_to_root).pack(padx=10, pady=(0, 0), anchor="w")
+"""
+
 
 """
 def is_process_running(process_name):
