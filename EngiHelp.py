@@ -24,7 +24,7 @@ import tempfile
 import ctypes
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.8.7"
+SCRIPT_VERSION = "v0.9.0"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -119,8 +119,8 @@ if icon_path:
    root.iconbitmap(icon_path)  # Применяем иконку к главному окну
 
 # Размеры главного окна
-WINDOW_WIDTH = 389
-WINDOW_HEIGHT = 465
+WINDOW_WIDTH = 397
+WINDOW_HEIGHT = 444
 WINDOW_OFFSET_X = 230
 WINDOW_OFFSET_Y = 140
 
@@ -396,10 +396,100 @@ def open_explorer_to_root():
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось открыть проводник:\n{e}")
 
+def on_task_selected(event):
+    selected_task_id = task_id_var.get()
+    if not selected_task_id:
+        return
+
+    product_root = find_product_root(path_var.get())
+    if not product_root:
+        messagebox.showerror("Ошибка", "Не удалось определить корневую папку продукта.")
+        return
+
+    tasks_file = os.path.join(str(Path.home()), "Documents", "tasks.json")
+    if not os.path.exists(tasks_file):
+        return
+
+    try:
+        with open(tasks_file, "r", encoding="utf-8") as f:
+            tasks = json.load(f)
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось загрузить задачи:\n{e}")
+        return
+
+    if selected_task_id not in tasks:
+        return
+
+    task_info = tasks[selected_task_id]
+    if "ini_settings" not in task_info:
+        return
+
+    ini_settings = task_info["ini_settings"]
+    ini_path = task_info["ini_path"]
+
+    # Формируем путь к rk7srv.INI один раз
+    rk7srv_ini_path = os.path.join(ini_path, "rk7srv.INI")
+    if not os.path.exists(rk7srv_ini_path):
+        messagebox.showerror("Ошибка", f"Файл rk7srv.INI не найден:\n{rk7srv_ini_path}")
+        return
+
+    # Применяем UseDBSync
+    if "UseDBSync" in ini_settings:
+        for filename, value in ini_settings["UseDBSync"].items():
+            if filename.lower() == "rk7man.ini":
+                continue  # Пропускаем rk7man.ini
+            full_path = os.path.join(ini_path, filename)
+            if os.path.exists(full_path):
+                update_ini_file(full_path, str(value), "UseDBSync")
+
+    # Применяем UseSQL
+    if "UseSQL" in ini_settings:
+        update_ini_file(rk7srv_ini_path, str(ini_settings["UseSQL"]), "USESQL")
+
+    # Применяем Station и Server
+    if "Station" in ini_settings and "Server" in ini_settings:
+        station_var.set(ini_settings["Station"])
+        server_var.set(ini_settings["Server"])
+        save_wincash_params()  # Сохраняем значения в wincash.ini и RKEEPER.INI
+
+    # Получаем путь к base_XXX из tasks.json и обновляем UDBFILE и WorkModules
+    base_path = task_info["base_path"]
+    base_dir = os.path.basename(base_path)
+    update_rk7srv_ini(rk7srv_ini_path, base_dir)
+
+    #messagebox.showinfo("Успех", f"Параметры для задачи {selected_task_id} применены!")
+
+# Функция по обновлению rk7srv.INI для директории по задачи
+def update_rk7srv_ini(ini_path, base_dir):
+    try:
+        # Читаем файл в кодировке cp1251
+        with open(ini_path, 'r', encoding='cp1251') as file:
+            lines = file.readlines()
+
+        new_lines = []
+        for line in lines:
+            # Ищем строки, начинающиеся с UDBFILE или WorkModules, игнорируя пробелы
+            if re.match(r'^\s*UDBFILE\s*=', line, re.IGNORECASE):
+                new_lines.append(f"UDBFILE            = ..\\..\\{base_dir}\\rk7.udb\n")
+            elif re.match(r'^\s*WorkModules\s*=', line, re.IGNORECASE):
+                new_lines.append(f"WorkModules        = ..\\..\\{base_dir}\\workmods\n")
+            else:
+                new_lines.append(line)
+
+        # Сохраняем изменения
+        with open(ini_path, 'w', encoding='cp1251') as file:
+            file.writelines(new_lines)
+
+        print("Файл успешно обновлён!")
+    except Exception as e:
+        print(f"Ошибка при обновлении файла: {e}")
+
+
+
 
 # Фрейм для метки, кнопки "Открыть" и поля для номера задачи
 label_and_open_frame = tk.Frame(settings_tab)
-label_and_open_frame.pack(fill="x", padx=10, pady=(10, 0), ipady=0)
+label_and_open_frame.pack(fill="x", padx=9, pady=(10, 0), ipady=0)
 
 # Левая часть: метка "Путь к RK7:" и кнопка "Открыть"
 tk.Label(
@@ -414,38 +504,35 @@ tk.Button(
     text="Открыть",
     command=open_explorer_to_root,
     font=("TkDefaultFont", 8)
-).grid(row=0, column=1, padx=(5, 0), sticky="w")
+).grid(row=0, column=1, padx=(1, 0), sticky="w")
 
-# Правая часть: текст "Номер задачи:" и поле для ввода
+
+# Фрейм для метки и комбобокса
+task_id_frame = tk.Frame(label_and_open_frame)
+task_id_frame.grid(row=0, column=2, columnspan=2, padx=(10, 0), sticky="w")
+
 tk.Label(
-    label_and_open_frame,
+    task_id_frame,
     text="Номер задачи:",
     font=("TkDefaultFont", 9)
-).grid(row=0, column=2, padx=(20, 5), sticky="e")
+).pack(side="left")
 
+# Combobox для номера задачи
 task_id_var = tk.StringVar()
-task_id_entry = tk.Entry(
-    label_and_open_frame,
+task_id_combobox = ttk.Combobox(
+    task_id_frame,
     textvariable=task_id_var,
     width=7,
-    font=("TkDefaultFont", 10)
+    font=("TkDefaultFont", 9)
 )
-task_id_entry.grid(row=0, column=3, padx=(0, 0), sticky="w")
+task_id_combobox.pack(side="left", padx=(1, 0))
+task_id_combobox.bind("<<ComboboxSelected>>", on_task_selected)
 
+# Привяжите сохранение к событию изменения текста в поле (опционально)
+task_id_var.trace_add("write", lambda *args: save_task_id_to_file())
 
-# Выбор пути
-path_frame = tk.Frame(settings_tab)
-path_frame.pack(fill="x", padx=10, pady=(5, 0))
-path_var = tk.StringVar()
-ini_paths, auto_update_enabled = load_config_paths()
-if ini_paths:
-    path_var.set(ini_paths[0])
-path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
-path_entry.pack(side="left", fill="x", expand=True)
-
-# Сохранения номера задачи в файл
-def save_task_id():
-    task_id = task_id_var.get()
+def save_task_id_to_file():
+    task_id = task_id_var.get().strip()
     if not task_id:
         return  # Если поле пустое, ничего не сохраняем
 
@@ -461,8 +548,201 @@ def save_task_id():
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось сохранить номер задачи:\n{e}")
 
-# Привяжите сохранение к событию изменения текста в поле (опционально)
-task_id_var.trace_add("write", lambda *args: save_task_id())
+# Функция по сбору параметров
+def get_ini_settings(ini_path):
+    """Сбор параметров UseDBSync, UseSQL, Station, Server из INI-файлов."""
+    settings = {
+        "UseDBSync": get_usedbsync_values(),
+        "UseSQL": get_usesql_value(),
+        "Station": station_var.get(),
+        "Server": server_var.get()
+    }
+    return settings
+
+# Сохранения номера задачи в файл
+def save_task_id():
+    task_id = task_id_var.get().strip()
+    if not task_id:
+        messagebox.showwarning("Предупреждение", "Поле 'Номер задачи' пустое!")
+        return
+
+    product_root = find_product_root(path_var.get())
+    if not product_root:
+        messagebox.showerror("Ошибка", "Не удалось определить корневую папку продукта.")
+        return
+
+    base_path = os.path.join(product_root, "base")
+    if not os.path.exists(base_path):
+        messagebox.showerror("Ошибка", f"Папка {base_path} не найдена!")
+        return
+
+    # Проверяем, запущен ли процесс refsrv.exe
+    refsrv_running = False
+    for proc in psutil.process_iter(['name']):
+        if proc.info['name'].lower() == "refsrv.exe":
+            refsrv_running = True
+            break
+
+    if refsrv_running:
+        messagebox.showwarning(
+            "Предупреждение",
+            "Процесс refsrv.exe запущен и может блокировать файлы.\n"
+            "Сначала будет attempted копирование файла rk7.udb для проверки."
+        )
+
+    # Пробуем скопировать rk7.udb для проверки блокировки
+    test_file = os.path.join(base_path, "rk7.udb")
+    if os.path.exists(test_file):
+        try:
+            shutil.copy2(test_file, os.path.join(product_root, "rk7.udb.test"))
+            os.remove(os.path.join(product_root, "rk7.udb.test"))
+        except PermissionError:
+            if messagebox.askyesno(
+                "Предупреждение",
+                "Файлы в папке base заблокированы процессом refsrv.exe.\n"
+                "Закрыть процесс и продолжить?"
+            ):
+                for proc in psutil.process_iter(['name']):
+                    if proc.info['name'].lower() == "refsrv.exe":
+                        proc.terminate()
+                        time.sleep(1)  # Даем время на завершение процесса
+            else:
+                return
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось проверить блокировку файлов:\n{e}")
+            return
+
+    # Формируем имя для копии папки
+    new_base_path = os.path.join(product_root, f"base_{task_id}")
+    # Проверяем, существует ли уже папка с таким именем
+    if os.path.exists(new_base_path):
+        if messagebox.askyesno(
+            "Предупреждение",
+            f"Папка {new_base_path} уже существует. Перезаписать?"
+        ):
+            try:
+                shutil.rmtree(new_base_path)
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось удалить существующую папку:\n{e}")
+                return
+        else:
+            return
+
+    # Копируем папку base
+    try:
+        shutil.copytree(base_path, new_base_path)
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось скопировать папку base:\n{e}")
+        return
+    
+    # Собираем параметры INI
+    ini_settings = get_ini_settings(path_var.get())
+
+    # Путь к файлу tasks.json в папке "Документы"
+    tasks_file = os.path.join(str(Path.home()), "Documents", "tasks.json")
+    tasks = {}
+    # Загружаем существующие задачи, если файл существует
+    if os.path.exists(tasks_file):
+        try:
+            with open(tasks_file, "r", encoding="utf-8") as f:
+                tasks = json.load(f)
+        except json.JSONDecodeError:
+            tasks = {}
+
+    # Добавляем новую задачу с параметрами INI
+    tasks[task_id] = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "base_path": new_base_path,
+        "ini_path": path_var.get().replace("\\", "/"),
+        "status": "copied",
+        "ini_settings": ini_settings  # Сохраняем параметры
+    }
+
+    # Перемещаем текущую задачу в начало словаря
+    tasks = {task_id: tasks[task_id], **{k: v for k, v in tasks.items() if k != task_id}}
+
+    # Сохраняем обновлённый список задач
+    try:
+        with open(tasks_file, "w", encoding="utf-8") as f:
+            # json.dump({"auto_update": True}, f, indent=4, ensure_ascii=False)
+            json.dump(tasks, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось сохранить информацию о задаче:\n{e}")
+        return
+
+    task_id_combobox['values'] = load_task_ids()
+    messagebox.showinfo("Успех", f"Папка base успешно скопирована как {new_base_path}!\nИнформация о задаче сохранена в tasks.json.")
+    base_dir = os.path.basename(new_base_path)  # Например, "base_666"
+    rk7srv_ini_path = os.path.join(path_var.get(), "rk7srv.INI")
+    update_rk7srv_ini(rk7srv_ini_path, base_dir)
+
+# Загрузка номеров задач
+def load_task_ids():
+    tasks_file = os.path.join(str(Path.home()), "Documents", "tasks.json")
+    if not os.path.exists(tasks_file):
+        return []
+
+    try:
+        with open(tasks_file, "r", encoding="utf-8") as f:
+            tasks = json.load(f)
+            return list(tasks.keys())
+    except Exception:
+        return []
+
+def delete_task():
+    selected_task_id = task_id_var.get().strip()
+    if not selected_task_id:
+        messagebox.showwarning("Предупреждение", "Выберите задачу для удаления!")
+        return
+
+    tasks_file = os.path.join(str(Path.home()), "Documents", "tasks.json")
+    if not os.path.exists(tasks_file):
+        messagebox.showwarning("Предупреждение", "Файл с задачами не найден!")
+        return
+
+    try:
+        with open(tasks_file, "r", encoding="utf-8") as f:
+            tasks = json.load(f)
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось загрузить задачи:\n{e}")
+        return
+
+    if selected_task_id not in tasks:
+        messagebox.showwarning("Предупреждение", f"Задача {selected_task_id} не найдена!")
+        return
+
+    if messagebox.askyesno("Подтверждение", f"Удалить задачу {selected_task_id}?"):
+        del tasks[selected_task_id]
+        try:
+            with open(tasks_file, "w", encoding="utf-8") as f:
+                json.dump(tasks, f, indent=4, ensure_ascii=False)
+            task_id_combobox['values'] = load_task_ids()
+            task_id_var.set("")
+            messagebox.showinfo("Успех", f"Задача {selected_task_id} удалена!")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось удалить задачу:\n{e}")
+
+
+# Кнопка "Сохранить"
+tk.Button(
+    label_and_open_frame,
+    text="Сохранить",
+    command=save_task_id, # Функция сохранения номера здачи
+    font=("TkDefaultFont", 8)
+).grid(row=0, column=4, padx=(5, 0), sticky="w")
+
+# Выбор пути
+path_frame = tk.Frame(settings_tab)
+path_frame.pack(fill="x", padx=10, pady=(5, 0))
+path_var = tk.StringVar()
+ini_paths, auto_update_enabled = load_config_paths()
+if ini_paths:
+    path_var.set(ini_paths[0])
+path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
+path_entry.pack(side="left", fill="x", expand=True)
+
+
+
 
 
 def browse_path():
@@ -585,7 +865,6 @@ def apply_path(event=None):
     global ini_path, INI_FILE_USESQL
     ini_path = path_var.get()
     INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
-
     if not os.path.isdir(ini_path):
         messagebox.showerror("Ошибка", f"Путь не найден:\n{ini_path}")
         return
@@ -594,6 +873,7 @@ def apply_path(event=None):
     load_wincash_params() # Сначала считываем значения из файлов
     on_check()
     # update_ini_info_by_priority() Данный вызов создает баг с [Config] STATION= в wincash.ini
+    task_id_combobox['values'] = load_task_ids()
 
 path_entry.bind("<<ComboboxSelected>>", apply_path) # Обновление после выбора пути из списка
 
@@ -1095,6 +1375,7 @@ def load_wincash_params():
             station_var.set(line.strip().split("=", 1)[-1])
         elif line.strip().lower().startswith("server ="):
             server_var.set(line.strip().split("=", 1)[-1])
+    task_id_combobox["values"] = load_task_ids()
 
 def save_wincash_params():
     wincash_path = os.path.join(ini_path, "wincash.ini")
@@ -1249,19 +1530,28 @@ def show_product_folders():
 
 # ======================= Панель с кнопками "Проверить файлы", "Показать папки" и "Clear Base" =======================
 check_folder_frame = tk.Frame(settings_tab)
-check_folder_frame.pack(padx=10, pady=10, anchor="w", fill="x")  # Убедимся, что контейнер также расширяется по ширине
+check_folder_frame.pack(padx=10, pady=10, anchor="w", fill="x")
 
-# Кнопка для проверки наличия файлов
+# Первый ряд: "Проверить файлы", "Clear MIDBASE", "Clear Base"
 check_btn = tk.Button(check_folder_frame, text="Проверить файлы", command=on_check_with_message)
-check_btn.pack(side="left", padx=5, fill="x", expand=True)  # fill="x" и expand=True для равномерного распределения
+check_btn.grid(row=0, column=0, padx=5, sticky="ew")
 
-# Кнопка для файлов из MIDBASE
 show_folders_btn = tk.Button(check_folder_frame, text="Clear MIDBASE", command=delete_midbase_files)
-show_folders_btn.pack(side="left", padx=5, fill="x", expand=True)
+show_folders_btn.grid(row=0, column=1, padx=5, sticky="ew")
 
-# Кнопка для удаления файла
 clear_base_btn = tk.Button(check_folder_frame, text="Clear Base", command=delete_unwanted_files)
-clear_base_btn.pack(side="left", padx=5, fill="x", expand=True)  # fill="x" и expand=True для равномерного распределения
+clear_base_btn.grid(row=0, column=2, padx=5, sticky="ew")
+
+# Второй ряд: "Удалить задачу" (под "Проверить файлы")
+delete_task_btn = tk.Button(check_folder_frame, text="Удалить задачу", command=delete_task)
+delete_task_btn.grid(row=1, column=0, padx=5, sticky="ew", pady=(5, 0))
+
+# Настройка весов строк и столбцов для равномерного распределения
+check_folder_frame.grid_columnconfigure(0, weight=1)
+check_folder_frame.grid_columnconfigure(1, weight=1)
+check_folder_frame.grid_columnconfigure(2, weight=1)
+
+
 
 def get_short_path_name(long_path):
     buf = ctypes.create_unicode_buffer(260)
@@ -1362,3 +1652,4 @@ root.deiconify()
 root.mainloop()
 
 # pyinstaller --onefile --windowed --icon=".\.ico\иконка EngiHelp.ico" EngiHelp.py
+# pyinstaller --onefile --windowed --icon=".\.ico\иконка EngiHelp.ico" --hidden-import=tkinter --clean EngiHelp.py | очищает кэш перед сборкой.
