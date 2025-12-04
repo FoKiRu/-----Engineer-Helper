@@ -24,7 +24,7 @@ import tempfile
 import ctypes
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.9.0"
+SCRIPT_VERSION = "v0.9.1"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -188,11 +188,39 @@ def save_config_path(new_path):
     if 'path_entry' in globals():
         path_entry['values'] = paths
 
+# ======================= Вспомогательные функции =======================
+def extract_task_id_from_rk7srv_ini(ini_path):
+    if not os.path.exists(ini_path):
+        return None
+    try:
+        with open(ini_path, 'r', encoding='cp1251') as file:
+            for line in file:
+                line = line.strip()
+                if line.lower().startswith("udbfile") or line.lower().startswith("workmodules"):
+                    match = re.search(r'base_(\d+)', line)
+                    if match:
+                        return match.group(1)
+    except Exception as e:
+        print(f"Ошибка при чтении rk7srv.INI: {e}")
+    return None
+
 # ======================= Определение путей и начальных переменных =======================
 ini_paths, auto_update_enabled = load_config_paths()
 ini_path = ini_paths[0] if ini_paths else ""
 auto_update_var = tk.BooleanVar(value=auto_update_enabled)
-INI_FILE_USESQL=os.path.join(ini_path, "rk7srv.INI")
+INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
+
+# Создаём task_id_var ЗДЕСЬ, до первого использования
+task_id_var = tk.StringVar()
+
+# Извлекаем номер задачи из rk7srv.INI при старте
+if ini_path and os.path.exists(INI_FILE_USESQL):
+    task_id = extract_task_id_from_rk7srv_ini(INI_FILE_USESQL)
+    print(f"[DEBUG] Извлечённый номер задачи: {task_id}")  # Отладка
+    if task_id:
+        task_id_var.set(task_id)  # Теперь task_id_var существует
+    else:
+        task_id_var.set("")
 
 # ======================= Логика определения корня продукта =======================
 def find_product_root(selected_path):
@@ -518,7 +546,7 @@ tk.Label(
 ).pack(side="left")
 
 # Combobox для номера задачи
-task_id_var = tk.StringVar()
+#task_id_var = tk.StringVar() # создается ранее в коде
 task_id_combobox = ttk.Combobox(
     task_id_frame,
     textvariable=task_id_var,
