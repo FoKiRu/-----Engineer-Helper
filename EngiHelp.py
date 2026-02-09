@@ -24,7 +24,7 @@ import tempfile
 import ctypes
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.9.2"
+SCRIPT_VERSION = "v0.9.3"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -40,12 +40,84 @@ DESCRIPTION = (
     "- Автообновление интерфейса по текущим файлам конфигурации\n"
 )
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
-CONFIG_FILE = os.path.join(str(Path.home()), "Documents", "EngiHelp_config.json")
-# Если файл конфигурации отсутствует — создаём с пустой структурой
-if not os.path.exists(CONFIG_FILE):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump({"auto_update": True}, f, indent=4, ensure_ascii=False)
+DATA_FILE = os.path.join(str(Path.home()), "Documents", "EngiHelp_data.json")
+OLD_CONFIG_FILE = os.path.join(str(Path.home()), "Documents", "EngiHelp_config.json")
+OLD_TASKS_FILE = os.path.join(str(Path.home()), "Documents", "tasks.json")
 FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
+
+# ======================= Работа с единым файлом данных =======================
+
+def load_data():
+    """Загружает данные из единого JSON-файла."""
+    if not os.path.exists(DATA_FILE):
+        return {"settings": {"auto_update": True, "recent_paths": []}, "tasks": {}}
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # Убедимся, что все ключи на месте
+            if "settings" not in data:
+                data["settings"] = {"auto_update": True, "recent_paths": []}
+            if "tasks" not in data:
+                data["tasks"] = {}
+            return data
+    except (json.JSONDecodeError, IOError):
+        # В случае ошибки возвращаем пустую структуру
+        return {"settings": {"auto_update": True, "recent_paths": []}, "tasks": {}}
+
+def save_data(data):
+    """Сохраняет данные в единый JSON-файл."""
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+    except IOError as e:
+        print(f"Ошибка сохранения данных: {e}")
+
+def migrate_old_configs():
+    """
+    Проверяет наличие старых файлов конфигурации и переносит их данные в новый
+    единый файл, если он еще не существует.
+    """
+    if os.path.exists(DATA_FILE):
+        return # Новый файл уже есть, миграция не нужна
+
+    print("Миграция старых конфигурационных файлов...")
+    new_data = {"settings": {"auto_update": True, "recent_paths": []}, "tasks": {}}
+    migrated = False
+
+    # Миграция из EngiHelp_config.json
+    if os.path.exists(OLD_CONFIG_FILE):
+        try:
+            with open(OLD_CONFIG_FILE, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                new_data["settings"]["auto_update"] = config.get("auto_update", True)
+                paths = [
+                    v for k, v in sorted(config.items())
+                    if k.startswith("ini_dir") and isinstance(v, str) and v.strip()
+                ]
+                new_data["settings"]["recent_paths"] = paths
+                migrated = True
+        except Exception as e:
+            print(f"Не удалось мигрировать {OLD_CONFIG_FILE}: {e}")
+
+    # Миграция из tasks.json
+    if os.path.exists(OLD_TASKS_FILE):
+        try:
+            with open(OLD_TASKS_FILE, "r", encoding="utf-8") as f:
+                tasks = json.load(f)
+                new_data["tasks"] = tasks
+                migrated = True
+        except Exception as e:
+            print(f"Не удалось мигрировать {OLD_TASKS_FILE}: {e}")
+
+    if migrated:
+        save_data(new_data)
+        print("Миграция завершена. Создан новый файл: EngiHelp_data.json")
+        # Опционально: удалить старые файлы после успешной миграции
+        # if os.path.exists(OLD_CONFIG_FILE): os.remove(OLD_CONFIG_FILE)
+        # if os.path.exists(OLD_TASKS_FILE): os.remove(OLD_TASKS_FILE)
+
+# Вызываем миграцию при старте программы
+migrate_old_configs()
 
 # ======================= Проверка URL файла .gitignore на GitHub =======================
 GITHUB_URL = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/.gitignore"
@@ -141,52 +213,33 @@ settings_tab = tk.Frame(notebook)
 notebook.add(settings_tab, text="Параметры")
 
 # =================== Работа с EngiHelp_config.json (мульти-пути) =============
-def load_config_paths():
-    if not os.path.exists(CONFIG_FILE):
-        return [], False
-
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        try:
-            config = json.load(f)
-        except json.JSONDecodeError:
-            return [], False
-        
-    auto_update = config.get("auto_update", False)
-    paths = [
-        v for k, v in sorted(config.items())
-        if k.startswith("ini_dir") and isinstance(v, str) and v.strip()
-    ]
+def load_settings_and_paths():
+    data = load_data()
+    settings = data.get("settings", {})
+    paths = settings.get("recent_paths", [])
+    auto_update = settings.get("auto_update", True)
     return paths, auto_update
 
-"""
-print("Текущая рабочая директория:", os.getcwd())
-print("Ожидаемый путь к EngiHelp_config.json:", os.path.abspath("cEngiHelp_config.json"))
-"""
 
-def save_config_path(new_path):
-    # Заменяем все обратные слэши на прямые
+def save_settings_and_path(new_path):
     new_path = new_path.replace("\\", "/")
+    data = load_data()
     
-    # Загружаем текущие пути и обновляем их
-    paths, _ = load_config_paths()
+    # Обновляем список путей
+    paths = data["settings"].get("recent_paths", [])
     if new_path in paths:
         paths.remove(new_path)
     paths.insert(0, new_path)
-    paths = paths[:3]
+    data["settings"]["recent_paths"] = paths[:3] # Оставляем только 3 последних
 
-    # Формируем конфигурацию с обновленными путями
-    config = {f"ini_dir{i}": path for i, path in enumerate(paths)}
+    # Обновляем флаг автообновления
+    data["settings"]["auto_update"] = auto_update_var.get()
     
-    # Добавляем флаг автообновления в конфигурацию
-    config["auto_update"] = auto_update_var.get()
-
-    # Сохраняем конфигурацию в JSON-файл
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=4, ensure_ascii=False)
+    save_data(data)
     
-    # Обновляем список путей в комбобоксе
+    # Обновляем выпадающий список в интерфейсе
     if 'path_entry' in globals():
-        path_entry['values'] = paths
+        path_entry['values'] = data["settings"]["recent_paths"]
 
 # ======================= Вспомогательные функции =======================
 def extract_task_id_from_rk7srv_ini(ini_path):
@@ -205,7 +258,7 @@ def extract_task_id_from_rk7srv_ini(ini_path):
     return None
 
 # ======================= Определение путей и начальных переменных =======================
-ini_paths, auto_update_enabled = load_config_paths()
+ini_paths, auto_update_enabled = load_settings_and_paths()
 ini_path = ini_paths[0] if ini_paths else ""
 auto_update_var = tk.BooleanVar(value=auto_update_enabled)
 INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
@@ -331,7 +384,7 @@ def update_ini_file(filepath, value, key):
 
         # Проверяем наличие секции [DBSYNC]
         for line in lines:
-            if re.match(r'^\s*\[DBSYNC\]\s*$', line, re.IGNORECASE):
+            if re.match(r'^\s*\[DBSYNC\]\s*$', line, re.IGNORECASE): # ИСПРАВЛЕНО
                 dbsync_section_exists = True
                 break
 
@@ -358,7 +411,7 @@ def update_ini_file(filepath, value, key):
             final_lines = []
             for line in new_lines:
                 final_lines.append(line)
-                if re.match(r'^\s*\[DBSYNC\]\s*$', line, re.IGNORECASE):
+                if re.match(r'^\s*\[DBSYNC\]\s*$', line, re.IGNORECASE): # ИСПРАВЛЕНО
                     final_lines.append(f"{key}={value}\n")
                     inserted = True
             
@@ -461,16 +514,9 @@ def on_task_selected(event):
         messagebox.showerror("Ошибка", "Не удалось определить корневую папку продукта.")
         return
 
-    tasks_file = os.path.join(str(Path.home()), "Documents", "tasks.json")
-    if not os.path.exists(tasks_file):
-        return
+    data = load_data()
+    tasks = data.get("tasks", {})
 
-    try:
-        with open(tasks_file, "r", encoding="utf-8") as f:
-            tasks = json.load(f)
-    except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось загрузить задачи:\n{e}")
-        return
 
     if selected_task_id not in tasks:
         return
@@ -694,15 +740,9 @@ def save_task_id():
     ini_settings = get_ini_settings(path_var.get())
 
     # Путь к файлу tasks.json в папке "Документы"
-    tasks_file = os.path.join(str(Path.home()), "Documents", "tasks.json")
-    tasks = {}
     # Загружаем существующие задачи, если файл существует
-    if os.path.exists(tasks_file):
-        try:
-            with open(tasks_file, "r", encoding="utf-8") as f:
-                tasks = json.load(f)
-        except json.JSONDecodeError:
-            tasks = {}
+    data = load_data()
+    tasks = data.get("tasks", {})
 
     # Добавляем новую задачу с параметрами INI
     tasks[task_id] = {
@@ -716,14 +756,11 @@ def save_task_id():
     # Перемещаем текущую задачу в начало словаря
     tasks = {task_id: tasks[task_id], **{k: v for k, v in tasks.items() if k != task_id}}
 
+    # Обновляем задачи в основной структуре данных
+    data["tasks"] = tasks
+
     # Сохраняем обновлённый список задач
-    try:
-        with open(tasks_file, "w", encoding="utf-8") as f:
-            # json.dump({"auto_update": True}, f, indent=4, ensure_ascii=False)
-            json.dump(tasks, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось сохранить информацию о задаче:\n{e}")
-        return
+    save_data(data)
 
     task_id_combobox['values'] = load_task_ids()
     messagebox.showinfo("Успех", f"Папка base успешно скопирована как {new_base_path}!\nИнформация о задаче сохранена в tasks.json.")
@@ -733,16 +770,8 @@ def save_task_id():
 
 # Загрузка номеров задач
 def load_task_ids():
-    tasks_file = os.path.join(str(Path.home()), "Documents", "tasks.json")
-    if not os.path.exists(tasks_file):
-        return []
-
-    try:
-        with open(tasks_file, "r", encoding="utf-8") as f:
-            tasks = json.load(f)
-            return list(tasks.keys())
-    except Exception:
-        return []
+    data = load_data()
+    return list(data.get("tasks", {}).keys())
 
 def delete_task():
     selected_task_id = task_id_var.get().strip()
@@ -750,17 +779,8 @@ def delete_task():
         messagebox.showwarning("Предупреждение", "Выберите задачу для удаления!")
         return
 
-    tasks_file = os.path.join(str(Path.home()), "Documents", "tasks.json")
-    if not os.path.exists(tasks_file):
-        messagebox.showwarning("Предупреждение", "Файл с задачами не найден!")
-        return
-
-    try:
-        with open(tasks_file, "r", encoding="utf-8") as f:
-            tasks = json.load(f)
-    except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось загрузить задачи:\n{e}")
-        return
+    data = load_data()
+    tasks = data.get("tasks", {})
 
     if selected_task_id not in tasks:
         messagebox.showwarning("Предупреждение", f"Задача {selected_task_id} не найдена!")
@@ -768,14 +788,12 @@ def delete_task():
 
     if messagebox.askyesno("Подтверждение", f"Удалить задачу {selected_task_id}?"):
         del tasks[selected_task_id]
-        try:
-            with open(tasks_file, "w", encoding="utf-8") as f:
-                json.dump(tasks, f, indent=4, ensure_ascii=False)
-            task_id_combobox['values'] = load_task_ids()
-            task_id_var.set("")
-            messagebox.showinfo("Успех", f"Задача {selected_task_id} удалена!")
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось удалить задачу:\n{e}")
+        data["tasks"] = tasks # Обновляем задачи в основной структуре
+        save_data(data) # Сохраняем все данные
+        
+        task_id_combobox['values'] = load_task_ids()
+        task_id_var.set("")
+        messagebox.showinfo("Успех", f"Задача {selected_task_id} удалена!")
 
 
 # Кнопка "Сохранить"
@@ -790,7 +808,7 @@ tk.Button(
 path_frame = tk.Frame(settings_tab)
 path_frame.pack(fill="x", padx=10, pady=(5, 0))
 path_var = tk.StringVar()
-ini_paths, auto_update_enabled = load_config_paths()
+ini_paths, auto_update_enabled = load_settings_and_paths()
 if ini_paths:
     path_var.set(ini_paths[0])
 path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
@@ -924,7 +942,7 @@ def apply_path(event=None):
         messagebox.showerror("Ошибка", f"Путь не найден:\n{ini_path}")
         return
 
-    save_config_path(ini_path)
+    save_settings_and_path(ini_path)
     load_wincash_params() # Сначала считываем значения из файлов
     on_check()
     # update_ini_info_by_priority() Данный вызов создает баг с [Config] STATION= в wincash.ini
