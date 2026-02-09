@@ -22,9 +22,10 @@ import requests
 import sys
 import tempfile
 import ctypes
+ 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.9.3"
+SCRIPT_VERSION = "v0.9.4"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -240,6 +241,19 @@ def save_settings_and_path(new_path):
     # Обновляем выпадающий список в интерфейсе
     if 'path_entry' in globals():
         path_entry['values'] = data["settings"]["recent_paths"]
+
+def find_latest_task_for_path(target_path):
+    """Находит самый последний сохраненный ID задачи для указанного пути."""
+    data = load_data()
+    tasks = data.get("tasks", {})
+    
+    # Задачи уже отсортированы (самая новая вверху) благодаря логике сохранения.
+    # Поэтому первый найденный результат и будет самым последним.
+    for task_id, task_info in tasks.items():
+        if task_info.get("ini_path") == target_path:
+            return task_id  # Нашли, возвращаем ID
+            
+    return None  # Для этого пути задач не найдено
 
 # ======================= Вспомогательные функции =======================
 def extract_task_id_from_rk7srv_ini(ini_path):
@@ -936,16 +950,37 @@ def update_ini_info_by_priority():
 
 def apply_path(event=None):
     global ini_path, INI_FILE_USESQL
-    ini_path = path_var.get()
-    INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
-    if not os.path.isdir(ini_path):
-        messagebox.showerror("Ошибка", f"Путь не найден:\n{ini_path}")
+    
+    new_path = path_var.get()
+    if not os.path.isdir(new_path):
+        messagebox.showerror("Ошибка", f"Путь не найден:\n{new_path}")
         return
 
+    # Обновляем глобальные переменные
+    ini_path = new_path
+    INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
+
+    # Сохраняем выбранный путь в конфиг
     save_settings_and_path(ini_path)
-    load_wincash_params() # Сначала считываем значения из файлов
-    on_check()
-    # update_ini_info_by_priority() Данный вызов создает баг с [Config] STATION= в wincash.ini
+    
+    # --- НОВАЯ ЛОГИКА ДЛЯ АВТОЗАГРУЗКИ ЗАДАЧИ ---
+    latest_task_id = find_latest_task_for_path(ini_path)
+    
+    if latest_task_id:
+        # Если для этого пути найдена задача, применяем ее настройки
+        print(f"Найден последний ID задачи ({latest_task_id}) для пути {ini_path}. Применяем настройки.")
+        task_id_var.set(latest_task_id)
+        # Вызываем on_task_selected вручную, чтобы гарантировать применение настроек
+        on_task_selected(None) 
+    else:
+        # Если задач нет, очищаем поле и загружаем данные напрямую из INI-файлов
+        print(f"Для пути {ini_path} сохраненных задач не найдено. Загружаем из INI-файлов.")
+        task_id_var.set("") 
+        load_wincash_params()
+        on_check()
+    # --- КОНЕЦ НОВОЙ ЛОГИКИ ---
+    
+    # В любом случае обновляем список всех доступных задач в выпадающем списке
     task_id_combobox['values'] = load_task_ids()
 
 path_entry.bind("<<ComboboxSelected>>", apply_path) # Обновление после выбора пути из списка
