@@ -24,7 +24,7 @@ import tempfile
 import ctypes
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.9.1"
+SCRIPT_VERSION = "v0.9.2"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -310,21 +310,32 @@ def get_usesql_value():
 
 def update_ini_file(filepath, value, key):
     try:
-        shutil.copy2(filepath, filepath + ".bak")
-
-        filename = os.path.basename(filepath).lower()
-
-        try:
-            with open(filepath, 'r', encoding='utf-8') as file:
-                lines = file.readlines()
-        except UnicodeDecodeError:
-            with open(filepath, 'r', encoding='cp1251') as file:
-                lines = file.readlines()
+        # Создаем бэкап только если файл существует
+        if os.path.exists(filepath):
+            shutil.copy2(filepath, filepath + ".bak")
+        
+        lines = []
+        # Пытаемся прочитать файл, если он существует
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, 'r', encoding='utf-8') as file:
+                    lines = file.readlines()
+            except UnicodeDecodeError:
+                with open(filepath, 'r', encoding='cp1251') as file:
+                    lines = file.readlines()
 
         updated = False
         new_lines = []
         key_found = False
+        dbsync_section_exists = False
 
+        # Проверяем наличие секции [DBSYNC]
+        for line in lines:
+            if re.match(r'^\s*\[DBSYNC\]\s*$', line, re.IGNORECASE):
+                dbsync_section_exists = True
+                break
+
+        # Обновляем или добавляем строки
         for line in lines:
             if re.match(fr'^\s*{key}\s*=.*', line, re.IGNORECASE):
                 new_lines.append(f"{key}={value}\n")
@@ -333,17 +344,32 @@ def update_ini_file(filepath, value, key):
             else:
                 new_lines.append(line)
 
-        # если параметр не найден
+        # Если ключ не найден, добавляем его
         if not key_found:
-            if filename == "rk7man.ini":
-                # ничего не добавляем
-                pass
-            else:
-                # добавляем секцию и параметр
+            # Если секции [DBSYNC] нет, добавляем ее
+            if not dbsync_section_exists:
+                # Добавляем пустую строку перед секцией для красоты
+                if new_lines and not new_lines[-1].endswith('\n'):
+                    new_lines.append('\n')
                 new_lines.append("\n[DBSYNC]\n")
-                new_lines.append(f"{key}={value}\n")
-                updated = True
+            
+            # Ищем место для вставки параметра (сразу после [DBSYNC])
+            inserted = False
+            final_lines = []
+            for line in new_lines:
+                final_lines.append(line)
+                if re.match(r'^\s*\[DBSYNC\]\s*$', line, re.IGNORECASE):
+                    final_lines.append(f"{key}={value}\n")
+                    inserted = True
+            
+            if inserted:
+                new_lines = final_lines
+            else: # Если секция была добавлена в конец, просто добавляем ключ
+                 new_lines.append(f"{key}={value}\n")
 
+            updated = True
+
+        # Записываем изменения в файл
         with open(filepath, 'w', encoding='cp1251') as file:
             file.writelines(new_lines)
 
@@ -398,10 +424,11 @@ def toggle_usesql():
 
 def run_update(value):
     failed = []
+    # Теперь rk7man.ini обрабатывается вместе со всеми
     for filename in FILES:
-        if filename.lower() == "rk7man.ini":
-            continue
         full_path = os.path.join(ini_path, filename)
+        if not os.path.exists(full_path): # Проверку на существование файла
+            continue
         success = update_ini_file(full_path, value, "UseDBSync")
         if not success:
             failed.append(filename)
@@ -464,8 +491,8 @@ def on_task_selected(event):
     # Применяем UseDBSync
     if "UseDBSync" in ini_settings:
         for filename, value in ini_settings["UseDBSync"].items():
-            if filename.lower() == "rk7man.ini":
-                continue  # Пропускаем rk7man.ini
+            #if filename.lower() == "rk7man.ini":
+                #continue  # Пропускаем rk7man.ini
             full_path = os.path.join(ini_path, filename)
             if os.path.exists(full_path):
                 update_ini_file(full_path, str(value), "UseDBSync")
