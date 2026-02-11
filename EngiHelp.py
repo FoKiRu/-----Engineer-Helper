@@ -25,7 +25,7 @@ import ctypes
  
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.9.5"
+SCRIPT_VERSION = "v0.9.6"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -523,49 +523,43 @@ def on_task_selected(event):
     if not selected_task_id:
         return
 
-    # Загружаем все данные
     data = load_data()
     tasks = data.get("tasks", {})
 
     if selected_task_id not in tasks:
-        # Это может произойти, если пользователь ввел ID вручную, а такой задачи нет
         return
 
-    # --- НОВАЯ ЛОГИКА: ПЕРЕМЕЩЕНИЕ ВЫБРАННОЙ ЗАДАЧИ НАВЕРХ СПИСКА ---
+    # --- ЛОГИКА ПЕРЕМЕЩЕНИЯ ЗАДАЧИ НАВЕРХ ---
     if list(tasks.keys())[0] != selected_task_id:
         print(f"Перемещаем задачу {selected_task_id} наверх списка.")
-        # 1. Извлекаем выбранную задачу
         selected_task_info = tasks.pop(selected_task_id)
-        
-        # 2. Создаем новый отсортированный словарь
-        # Сначала идет выбранная задача, потом все остальные
         sorted_tasks = {selected_task_id: selected_task_info, **tasks}
-        
-        # 3. Обновляем данные и сохраняем
         data["tasks"] = sorted_tasks
         save_data(data)
-        
-        # 4. Обновляем выпадающий список в интерфейсе, чтобы отразить новый порядок
         task_id_combobox['values'] = list(sorted_tasks.keys())
-        
-        # Обновляем `tasks` для дальнейшей работы в этой функции
         tasks = sorted_tasks
-    # --- КОНЕЦ НОВОЙ ЛОГИКИ ---
-
-    product_root = find_product_root(path_var.get())
-    if not product_root:
-        messagebox.showerror("Ошибка", "Не удалось определить корневую папку продукта.")
-        return
+    # --- КОНЕЦ ЛОГИКИ ---
 
     task_info = tasks[selected_task_id]
+    
+    # --- НОВАЯ ЛОГИКА: ОБНОВЛЕНИЕ ГЛАВНОГО ПУТИ ---
+    task_ini_path = task_info.get("ini_path")
+    if task_ini_path and path_var.get() != task_ini_path:
+        print(f"Смена пути на сохраненный в задаче: {task_ini_path}")
+        # Устанавливаем новый путь в переменную интерфейса
+        path_var.set(task_ini_path)
+        # Вызываем apply_path, но запрещаем ему повторно обновлять задачу,
+        # чтобы избежать бесконечного цикла.
+        apply_path(update_task=False)
+    # --- КОНЕЦ НОВОЙ ЛОГИКИ ---
+
     if "ini_settings" not in task_info:
         return
 
     ini_settings = task_info["ini_settings"]
-    ini_path = task_info["ini_path"]
+    ini_path_from_task = task_info["ini_path"] # Используем путь из задачи для надежности
 
-    # Формируем путь к rk7srv.INI один раз
-    rk7srv_ini_path = os.path.join(ini_path, "rk7srv.INI")
+    rk7srv_ini_path = os.path.join(ini_path_from_task, "rk7srv.INI")
     if not os.path.exists(rk7srv_ini_path):
         messagebox.showerror("Ошибка", f"Файл rk7srv.INI не найден:\n{rk7srv_ini_path}")
         return
@@ -573,7 +567,7 @@ def on_task_selected(event):
     # Применяем UseDBSync
     if "UseDBSync" in ini_settings:
         for filename, value in ini_settings["UseDBSync"].items():
-            full_path = os.path.join(ini_path, filename)
+            full_path = os.path.join(ini_path_from_task, filename)
             if os.path.exists(full_path):
                 update_ini_file(full_path, str(value), "UseDBSync")
 
@@ -585,9 +579,9 @@ def on_task_selected(event):
     if "Station" in ini_settings and "Server" in ini_settings:
         station_var.set(ini_settings["Station"])
         server_var.set(ini_settings["Server"])
-        save_wincash_params()  # Сохраняем значения в wincash.ini и RKEEPER.INI
+        save_wincash_params()
 
-    # Получаем путь к base_XXX из tasks.json и обновляем UDBFILE и WorkModules
+    # Обновляем путь к base_XXX
     base_path = task_info.get("base_path", "")
     if base_path:
         base_dir = os.path.basename(base_path)
@@ -969,7 +963,7 @@ def update_ini_info_by_priority():
     # Отладочная информация — какой файл был выбран приоритетным
     # print("[DEBUG] Используем", "wincash.ini" if wincash_mtime >= rkeeper_mtime else "RKEEPER.INI")
 
-def apply_path(event=None):
+def apply_path(event=None, update_task=True): # Добавлен параметр update_task
     global ini_path, INI_FILE_USESQL
     
     new_path = path_var.get()
@@ -984,24 +978,25 @@ def apply_path(event=None):
     # Сохраняем выбранный путь в конфиг
     save_settings_and_path(ini_path)
     
-    # --- НОВАЯ ЛОГИКА ДЛЯ АВТОЗАГРУЗКИ ЗАДАЧИ ---
-    latest_task_id = find_latest_task_for_path(ini_path)
-    
-    if latest_task_id:
-        # Если для этого пути найдена задача, применяем ее настройки
-        print(f"Найден последний ID задачи ({latest_task_id}) для пути {ini_path}. Применяем настройки.")
-        task_id_var.set(latest_task_id)
-        # Вызываем on_task_selected вручную, чтобы гарантировать применение настроек
-        on_task_selected(None) 
+    # --- ЛОГИКА АВТОЗАГРУЗКИ ЗАДАЧИ ---
+    if update_task: # Выполняем только если разрешено
+        latest_task_id = find_latest_task_for_path(ini_path)
+        
+        if latest_task_id:
+            print(f"Найден последний ID задачи ({latest_task_id}) для пути {ini_path}. Применяем настройки.")
+            task_id_var.set(latest_task_id)
+            on_task_selected(None) 
+        else:
+            print(f"Для пути {ini_path} сохраненных задач не найдено. Загружаем из INI-файлов.")
+            task_id_var.set("") 
+            load_wincash_params()
+            on_check()
     else:
-        # Если задач нет, очищаем поле и загружаем данные напрямую из INI-файлов
-        print(f"Для пути {ini_path} сохраненных задач не найдено. Загружаем из INI-файлов.")
-        task_id_var.set("") 
+        # Если обновление задачи не требуется, просто загружаем данные из INI
         load_wincash_params()
         on_check()
-    # --- КОНЕЦ НОВОЙ ЛОГИКИ ---
+    # --- КОНЕЦ ЛОГИКИ ---
     
-    # В любом случае обновляем список всех доступных задач в выпадающем списке
     task_id_combobox['values'] = load_task_ids()
 
 path_entry.bind("<<ComboboxSelected>>", apply_path) # Обновление после выбора пути из списка
