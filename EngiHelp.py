@@ -25,7 +25,7 @@ import ctypes
  
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.9.4"
+SCRIPT_VERSION = "v0.9.5"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: xkiladx@gmail.com"
 DESCRIPTION = (
@@ -523,16 +523,38 @@ def on_task_selected(event):
     if not selected_task_id:
         return
 
-    product_root = find_product_root(path_var.get())
-    if not product_root:
-        messagebox.showerror("Ошибка", "Не удалось определить корневую папку продукта.")
-        return
-
+    # Загружаем все данные
     data = load_data()
     tasks = data.get("tasks", {})
 
-
     if selected_task_id not in tasks:
+        # Это может произойти, если пользователь ввел ID вручную, а такой задачи нет
+        return
+
+    # --- НОВАЯ ЛОГИКА: ПЕРЕМЕЩЕНИЕ ВЫБРАННОЙ ЗАДАЧИ НАВЕРХ СПИСКА ---
+    if list(tasks.keys())[0] != selected_task_id:
+        print(f"Перемещаем задачу {selected_task_id} наверх списка.")
+        # 1. Извлекаем выбранную задачу
+        selected_task_info = tasks.pop(selected_task_id)
+        
+        # 2. Создаем новый отсортированный словарь
+        # Сначала идет выбранная задача, потом все остальные
+        sorted_tasks = {selected_task_id: selected_task_info, **tasks}
+        
+        # 3. Обновляем данные и сохраняем
+        data["tasks"] = sorted_tasks
+        save_data(data)
+        
+        # 4. Обновляем выпадающий список в интерфейсе, чтобы отразить новый порядок
+        task_id_combobox['values'] = list(sorted_tasks.keys())
+        
+        # Обновляем `tasks` для дальнейшей работы в этой функции
+        tasks = sorted_tasks
+    # --- КОНЕЦ НОВОЙ ЛОГИКИ ---
+
+    product_root = find_product_root(path_var.get())
+    if not product_root:
+        messagebox.showerror("Ошибка", "Не удалось определить корневую папку продукта.")
         return
 
     task_info = tasks[selected_task_id]
@@ -551,8 +573,6 @@ def on_task_selected(event):
     # Применяем UseDBSync
     if "UseDBSync" in ini_settings:
         for filename, value in ini_settings["UseDBSync"].items():
-            #if filename.lower() == "rk7man.ini":
-                #continue  # Пропускаем rk7man.ini
             full_path = os.path.join(ini_path, filename)
             if os.path.exists(full_path):
                 update_ini_file(full_path, str(value), "UseDBSync")
@@ -568,11 +588,12 @@ def on_task_selected(event):
         save_wincash_params()  # Сохраняем значения в wincash.ini и RKEEPER.INI
 
     # Получаем путь к base_XXX из tasks.json и обновляем UDBFILE и WorkModules
-    base_path = task_info["base_path"]
-    base_dir = os.path.basename(base_path)
-    update_rk7srv_ini(rk7srv_ini_path, base_dir)
+    base_path = task_info.get("base_path", "")
+    if base_path:
+        base_dir = os.path.basename(base_path)
+        update_rk7srv_ini(rk7srv_ini_path, base_dir)
 
-    #messagebox.showinfo("Успех", f"Параметры для задачи {selected_task_id} применены!")
+    print(f"Параметры для задачи {selected_task_id} применены!")
 
 # Функция по обновлению rk7srv.INI для директории по задачи
 def update_rk7srv_ini(ini_path, base_dir):
