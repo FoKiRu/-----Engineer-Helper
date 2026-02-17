@@ -25,9 +25,9 @@ import ctypes
  
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.9.6"
+SCRIPT_VERSION = "v0.9.7"
 AUTHOR = "Автор: Кирилл Рутенко"
-EMAIL = "Эл. почта: xkiladx@gmail.com"
+EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
     "EngiHelp — инструмент для работы с INI-файлами R-Keeper.\n"
     "Возможности:\n"
@@ -254,6 +254,16 @@ def find_latest_task_for_path(target_path):
             return task_id  # Нашли, возвращаем ID
             
     return None  # Для этого пути задач не найдено
+
+def get_current_task_base_path(task_id):
+    """Возвращает путь к папке base для указанного ID задачи."""
+    if not task_id:
+        return None
+    data = load_data()
+    task_info = data.get("tasks", {}).get(task_id)
+    if not task_info:
+        return None
+    return task_info.get("base_path")
 
 # ======================= Вспомогательные функции =======================
 def extract_task_id_from_rk7srv_ini(ini_path):
@@ -815,14 +825,33 @@ def delete_task():
         messagebox.showwarning("Предупреждение", f"Задача {selected_task_id} не найдена!")
         return
 
-    if messagebox.askyesno("Подтверждение", f"Удалить задачу {selected_task_id}?"):
+    # Получаем путь к папке, чтобы показать его пользователю и удалить
+    task_base_path = get_current_task_base_path(selected_task_id)
+
+    # Формируем более информативное сообщение для подтверждения
+    confirm_msg = f"Удалить задачу {selected_task_id} из списка?"
+    if task_base_path and os.path.exists(task_base_path):
+        confirm_msg += f"\n\nСвязанная папка ТАКЖЕ БУДЕТ УДАЛЕНА:\n{task_base_path}"
+
+    if messagebox.askyesno("Подтверждение удаления", confirm_msg):
+        # Шаг 1: Пытаемся удалить папку с диска (если она есть)
+        if task_base_path and os.path.exists(task_base_path):
+            try:
+                shutil.rmtree(task_base_path)
+                print(f"Папка {task_base_path} успешно удалена.")
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось удалить папку задачи:\n{e}\n\nЗапись о задаче не будет удалена.")
+                return  # Важно: прерываем операцию, если не удалось удалить папку
+
+        # Шаг 2: Если удаление папки прошло успешно (или папки не было), удаляем запись из JSON
         del tasks[selected_task_id]
-        data["tasks"] = tasks # Обновляем задачи в основной структуре
-        save_data(data) # Сохраняем все данные
+        data["tasks"] = tasks
+        save_data(data)
         
+        # Шаг 3: Обновляем интерфейс
         task_id_combobox['values'] = load_task_ids()
         task_id_var.set("")
-        messagebox.showinfo("Успех", f"Задача {selected_task_id} удалена!")
+        messagebox.showinfo("Успех", f"Задача {selected_task_id} и связанные с ней данные удалены!")
 
 
 # Кнопка "Сохранить"
@@ -1082,13 +1111,16 @@ def confirm_deletion_midbase(midbase_path):
 
 # ======================= Удаление base =======================
 def delete_unwanted_files():
-    # Получаем родительскую директорию для пути, исключая папку bin/win
-    parent_path = os.path.dirname(os.path.dirname(ini_path))  # Убираем bin/win
-    # Формируем и нормализуем путь к папке base, заменяем обратные слэши на прямые
-    base_path = os.path.normpath(os.path.join(parent_path, "base")).replace("\\", "/")
+    selected_task_id = task_id_var.get().strip()
+    if not selected_task_id:
+        messagebox.showwarning("Внимание", "Сначала выберите задачу, для которой нужно очистить папку base.")
+        return
 
-    if not os.path.isdir(base_path):
-        messagebox.showerror("Ошибка", f"Папка base не найдена:\n{base_path}")
+    # Используем нашу новую функцию для получения правильного пути
+    base_path = get_current_task_base_path(selected_task_id)
+
+    if not base_path or not os.path.isdir(base_path):
+        messagebox.showerror("Ошибка", f"Папка base для задачи {selected_task_id} не найдена:\n{base_path}")
         return
 
     # Список файлов и папок, которые НЕ должны быть удалены
@@ -1097,15 +1129,23 @@ def delete_unwanted_files():
         "ral.dat", "rk7.udb", "upgradedevices.abs", "upgradepresets.abs"
     ]
 
+    # Создаем колбэки с уже определенным путем
+    callback_with_backup = partial(proceed_with_backup_and_deletion, base_path, protected_files)
+    callback_without_backup = partial(proceed_with_deletion, protected_files, base_path, backup_path=None)
+
+    # Вызываем окно подтверждения
     confirm_deletion_with_options(
         protected_files,
-        callback_proceed=lambda: proceed_with_backup_and_deletion(base_path, protected_files)
+        base_path,  # Передаем путь для отображения в сообщении
+        callback_with_backup,
+        callback_without_backup
     )
 
 # Окно с предупреждением и исключением
-def confirm_deletion_with_options(protected_files, callback_proceed):
+# Окно с предупреждением и исключением
+def confirm_deletion_with_options(protected_files, base_path, callback_with_backup, callback_without_backup):
     win = tk.Toplevel(root)
-    win.title("Подтверждение удаления")
+    win.title("Подтверждение очистки")
     win.transient(root)
     win.grab_set()
     win.focus_force()
@@ -1114,15 +1154,16 @@ def confirm_deletion_with_options(protected_files, callback_proceed):
         win.iconbitmap(icon_path)
 
     win.update_idletasks()
-    w = 360
-    h = 170
+    w = 380 # Немного шире для длинных путей
+    h = 180
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
 
+    # Обновленное сообщение, показывающее, какая папка будет очищена
     msg = (
-        "Вы действительно хотите очистить папку Base и оставить следующие папки и файлы:\n\n"
-        + ", ".join(protected_files)
+        f"Вы действительно хотите очистить папку:\n{base_path}\n\n"
+        f"Будут оставлены: {', '.join(protected_files)}"
     )
     tk.Label(win, text=msg, justify="left", wraplength=w-20).pack(padx=10, pady=(10, 5))
 
@@ -1135,12 +1176,11 @@ def confirm_deletion_with_options(protected_files, callback_proceed):
     def on_delete():
         win.destroy()
         if do_backup_var.get():
-            callback_proceed()  # с резервной копией
+            callback_with_backup()
         else:
-            base_path = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(ini_path)), "base")).replace("\\", "/")
-            proceed_with_deletion(protected_files, base_path, backup_path=None)  # без резервной копии
+            callback_without_backup()
 
-    tk.Button(btn_frame, text="Удалить", command=on_delete).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Очистить", command=on_delete).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=win.destroy).pack(side="left", padx=5)
 
 
