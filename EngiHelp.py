@@ -22,10 +22,10 @@ import requests
 import sys
 import tempfile
 import ctypes
- 
+import webbrowser
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v0.9.7"
+SCRIPT_VERSION = "v1.0.1"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -299,6 +299,16 @@ if ini_path and os.path.exists(INI_FILE_USESQL):
     else:
         task_id_var.set("")
 
+# Открываем номер задачи в SD
+def open_task_in_sd():
+    task_id = task_id_var.get()
+    if task_id:
+        url = f'https://sd.rkeeper.ru/sd/operator/#esearch:full:serviceCall:ALL_OBJECTS!{{%22query%22:%22serviceCall@number:{task_id}%22}}'
+        webbrowser.open(url)
+    else:
+        messagebox.showwarning("Предупреждение", "Номер задачи не найден")
+
+
 # ======================= Логика определения корня продукта =======================
 def find_product_root(selected_path):
     """
@@ -539,6 +549,16 @@ def on_task_selected(event):
     if selected_task_id not in tasks:
         return
 
+    task_info = tasks[selected_task_id]
+
+    # === ПРОВЕРКА НА НЕСКОЛЬКО ВЕРСИЙ ===
+    versions = task_info.get("versions", {})
+    if len(versions) > 1:
+        # Показываем диалог выбора версии
+        show_version_selection_dialog(selected_task_id, task_info, versions)
+        return
+    # === КОНЕЦ ПРОВЕРКИ ===
+
     # --- ЛОГИКА ПЕРЕМЕЩЕНИЯ ЗАДАЧИ НАВЕРХ ---
     if list(tasks.keys())[0] != selected_task_id:
         print(f"Перемещаем задачу {selected_task_id} наверх списка.")
@@ -551,47 +571,40 @@ def on_task_selected(event):
     # --- КОНЕЦ ЛОГИКИ ---
 
     task_info = tasks[selected_task_id]
-    
-    # --- НОВАЯ ЛОГИКА: ОБНОВЛЕНИЕ ГЛАВНОГО ПУТИ ---
+
+    # --- ОБНОВЛЕНИЕ ГЛАВНОГО ПУТИ ---
     task_ini_path = task_info.get("ini_path")
     if task_ini_path and path_var.get() != task_ini_path:
         print(f"Смена пути на сохраненный в задаче: {task_ini_path}")
-        # Устанавливаем новый путь в переменную интерфейса
         path_var.set(task_ini_path)
-        # Вызываем apply_path, но запрещаем ему повторно обновлять задачу,
-        # чтобы избежать бесконечного цикла.
         apply_path(update_task=False)
-    # --- КОНЕЦ НОВОЙ ЛОГИКИ ---
+    # --- КОНЕЦ ---
 
     if "ini_settings" not in task_info:
         return
 
     ini_settings = task_info["ini_settings"]
-    ini_path_from_task = task_info["ini_path"] # Используем путь из задачи для надежности
+    ini_path_from_task = task_info["ini_path"]
 
     rk7srv_ini_path = os.path.join(ini_path_from_task, "rk7srv.INI")
     if not os.path.exists(rk7srv_ini_path):
         messagebox.showerror("Ошибка", f"Файл rk7srv.INI не найден:\n{rk7srv_ini_path}")
         return
 
-    # Применяем UseDBSync
     if "UseDBSync" in ini_settings:
         for filename, value in ini_settings["UseDBSync"].items():
             full_path = os.path.join(ini_path_from_task, filename)
             if os.path.exists(full_path):
                 update_ini_file(full_path, str(value), "UseDBSync")
 
-    # Применяем UseSQL
     if "UseSQL" in ini_settings:
         update_ini_file(rk7srv_ini_path, str(ini_settings["UseSQL"]), "USESQL")
 
-    # Применяем Station и Server
     if "Station" in ini_settings and "Server" in ini_settings:
         station_var.set(ini_settings["Station"])
         server_var.set(ini_settings["Server"])
         save_wincash_params()
 
-    # Обновляем путь к base_XXX
     base_path = task_info.get("base_path", "")
     if base_path:
         base_dir = os.path.basename(base_path)
@@ -625,7 +638,393 @@ def update_rk7srv_ini(ini_path, base_dir):
         print(f"Ошибка при обновлении файла: {e}")
 
 
+# ======================= Смена версии RK =======================
 
+def extract_rk_version_from_path(path):
+    """Извлекает версию RK из имени папки INST в пути."""
+    product_root = find_product_root(path)
+    if not product_root:
+        return None
+    folder_name = os.path.basename(product_root)
+    match = re.match(r'^INST(.+)$', folder_name, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return None
+
+
+def find_available_rk_versions(path):
+    """Находит все доступные версии INST в родительской директории."""
+    product_root = find_product_root(path)
+    if not product_root:
+        return []
+    parent_dir = os.path.dirname(product_root)
+    versions = []
+    try:
+        for item in os.listdir(parent_dir):
+            full_path = os.path.join(parent_dir, item)
+            if os.path.isdir(full_path):
+                match = re.match(r'^INST(.+)$', item, re.IGNORECASE)
+                if match:
+                    version_str = match.group(1)
+                    bin_win = os.path.join(full_path, "bin", "win")
+                    if os.path.isdir(bin_win):
+                        versions.append(version_str)
+    except Exception as e:
+        print(f"Ошибка сканирования версий: {e}")
+    return versions
+
+
+def kill_processes_for_version_change():
+    """Завершает процессы refsrv.exe и rk7man.exe."""
+    killed = []
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            name = proc.info['name']
+            if name and name.lower() in ('refsrv.exe', 'rk7man.exe'):
+                proc.terminate()
+                killed.append(name)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    if killed:
+        time.sleep(2)
+    return killed
+
+
+def change_rk_version():
+    """Главная функция кнопки 'Сменить версию RK'."""
+    selected_task_id = task_id_var.get().strip()
+    if not selected_task_id:
+        messagebox.showwarning("Предупреждение", "Сначала выберите задачу!")
+        return
+
+    data = load_data()
+    tasks = data.get("tasks", {})
+
+    if selected_task_id not in tasks:
+        messagebox.showwarning("Предупреждение", f"Задача {selected_task_id} не найдена!")
+        return
+
+    task_info = tasks[selected_task_id]
+    current_ini_path = task_info.get("ini_path", path_var.get())
+
+    # Извлекаем текущую версию
+    current_version = extract_rk_version_from_path(current_ini_path)
+    if not current_version:
+        messagebox.showerror("Ошибка",
+            "Не удалось определить текущую версию RK из пути.\n"
+            "Ожидается папка вида INST7.25.09.2004")
+        return
+
+    # Ищем доступные версии
+    available_versions = find_available_rk_versions(current_ini_path)
+    other_versions = [v for v in available_versions if v != current_version]
+
+    if not other_versions:
+        messagebox.showinfo("Информация",
+            f"Других версий RK не найдено.\n"
+            f"Текущая версия: {current_version}\n"
+            f"Директория поиска: {os.path.dirname(find_product_root(current_ini_path))}")
+        return
+
+    # === Диалог выбора версии ===
+    select_win = tk.Toplevel(root)
+    select_win.title("Сменить версию RK")
+    select_win.transient(root)
+    select_win.grab_set()
+    select_win.focus_force()
+
+    if icon_path:
+        select_win.iconbitmap(icon_path)
+
+    w, h = 300, 180
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    select_win.geometry(f"{w}x{h}+{x}+{y}")
+
+    tk.Label(select_win, text=(
+        f"Задача: {selected_task_id}\n"
+        f"Текущая версия: {current_version}\n\n"
+        f"Выберите версию для переноса базы:"
+    ), justify="left").pack(padx=10, pady=(10, 5))
+
+    version_var = tk.StringVar()
+    version_combo = ttk.Combobox(
+        select_win, textvariable=version_var,
+        values=other_versions, state="readonly", width=30
+    )
+    version_combo.pack(padx=10, pady=5)
+    if other_versions:
+        version_combo.current(0)
+
+    tk.Label(select_win, text=(
+        "⚠ Процессы refsrv.exe и rk7man.exe будут закрыты!"
+    ), fg="red", font=("TkDefaultFont", 8)).pack(padx=10, pady=(5, 0))
+
+    def on_confirm():
+        target_version = version_var.get()
+        if not target_version:
+            messagebox.showwarning("Предупреждение", "Выберите версию!")
+            return
+        select_win.destroy()
+        perform_version_change(selected_task_id, current_version, target_version)
+
+    btn_frame = tk.Frame(select_win)
+    btn_frame.pack(pady=10)
+    tk.Button(btn_frame, text="Перенести", command=on_confirm, width=12).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Отмена", command=select_win.destroy, width=12).pack(side="left", padx=5)
+
+
+def perform_version_change(task_id, current_version, target_version):
+    """Выполняет перенос базы задачи в другую версию RK."""
+    data = load_data()
+    tasks = data.get("tasks", {})
+    task_info = tasks[task_id]
+
+    current_ini_path = task_info.get("ini_path", path_var.get())
+    current_product_root = find_product_root(current_ini_path)
+    parent_dir = os.path.dirname(current_product_root)
+
+    # Пути к целевой версии
+    target_product_root = os.path.join(parent_dir, f"INST{target_version}")
+    target_bin_win = os.path.join(target_product_root, "bin", "win")
+
+    if not os.path.isdir(target_bin_win):
+        messagebox.showerror("Ошибка",
+            f"Папка bin/win не найдена в целевой версии:\n{target_bin_win}")
+        return
+
+    # Завершаем процессы
+    killed = kill_processes_for_version_change()
+    if killed:
+        print(f"Завершены процессы: {', '.join(killed)}")
+
+    # Получаем путь к base текущей задачи
+    current_base_path = task_info.get("base_path")
+    if not current_base_path or not os.path.isdir(current_base_path):
+        messagebox.showerror("Ошибка",
+            f"Папка base для задачи не найдена:\n{current_base_path}")
+        return
+
+    base_folder_name = os.path.basename(current_base_path)  # например base_123
+    target_base_path = os.path.join(target_product_root, base_folder_name)
+
+    # Копируем папку base в целевую версию
+    try:
+        if os.path.exists(target_base_path):
+            if not messagebox.askyesno("Предупреждение",
+                f"Папка уже существует:\n{target_base_path}\n\nПерезаписать?"):
+                return
+            shutil.rmtree(target_base_path)
+
+        shutil.copytree(current_base_path, target_base_path)
+        print(f"Base скопирована: {current_base_path} -> {target_base_path}")
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось скопировать base:\n{e}")
+        return
+
+    # Копируем .ini файлы в целевую bin/win
+    copied_files = []
+    for f in FILES:
+        src = os.path.join(current_ini_path, f)
+        dst = os.path.join(target_bin_win, f)
+        if os.path.isfile(src):
+            try:
+                shutil.copy2(src, dst)
+                copied_files.append(f)
+            except Exception as e:
+                print(f"Ошибка копирования {f}: {e}")
+
+    # Обновляем rk7srv.INI в целевой версии
+    target_rk7srv = os.path.join(target_bin_win, "rk7srv.INI")
+    if os.path.isfile(target_rk7srv):
+        update_rk7srv_ini(target_rk7srv, base_folder_name)
+
+    target_ini_path_normalized = target_bin_win.replace("\\", "/")
+
+    # === Сохраняем информацию о версиях в JSON ===
+    if "versions" not in task_info:
+        task_info["versions"] = {}
+
+    # Сохраняем текущую версию (если ещё не сохранена)
+    if current_version not in task_info["versions"]:
+        task_info["versions"][current_version] = {
+            "ini_path": current_ini_path,
+            "base_path": current_base_path,
+            "ini_settings": task_info.get("ini_settings", {})
+        }
+
+    # Сохраняем целевую версию
+    task_info["versions"][target_version] = {
+        "ini_path": target_ini_path_normalized,
+        "base_path": target_base_path.replace("\\", "/"),
+        "ini_settings": task_info.get("ini_settings", {}).copy()
+    }
+
+    # Обновляем основные поля задачи на новую версию
+    task_info["ini_path"] = target_ini_path_normalized
+    task_info["base_path"] = target_base_path.replace("\\", "/")
+
+    tasks[task_id] = task_info
+    data["tasks"] = tasks
+    save_data(data)
+
+    # Обновляем UI
+    path_var.set(target_ini_path_normalized)
+    apply_path(update_task=False)
+
+    messagebox.showinfo("Успех",
+        f"База задачи {task_id} перенесена в версию {target_version}.\n\n"
+        f"Скопировано INI-файлов: {len(copied_files)}\n"
+        f"Путь к base: {target_base_path}")
+
+
+# ======================= Выбор версии при переключении задачи =======================
+
+def show_version_selection_dialog(task_id, task_info, versions):
+    """Диалог выбора версии при выборе задачи с несколькими версиями."""
+    select_win = tk.Toplevel(root)
+    select_win.title("Выбор версии RK")
+    select_win.transient(root)
+    select_win.grab_set()
+    select_win.focus_force()
+
+    if icon_path:
+        select_win.iconbitmap(icon_path)
+
+    # Обратный порядок версий
+    version_list = list(reversed(sorted(versions.keys())))
+
+    # Определяем текущую версию
+    current_ver = extract_rk_version_from_path(task_info.get("ini_path", ""))
+
+    # Динамическая высота
+    row_height = 28
+    base_height = 140
+    h = base_height + len(version_list) * row_height
+    w = 260
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    select_win.geometry(f"{w}x{h}+{x}+{y}")
+    select_win.resizable(False, False)
+
+    # Заголовок по центру
+    tk.Label(select_win, text=(
+        f"Задача {task_id} имеет несколько версий RK.\n"
+        f"Выберите версию для работы:"
+    ), justify="center", anchor="center").pack(padx=10, pady=(15, 5), fill="x")
+
+    # === Переменная выбора ===
+    version_var_local = tk.StringVar()
+
+    if current_ver in version_list:
+        version_var_local.set(current_ver)
+    elif version_list:
+        version_var_local.set(version_list[0])
+
+    # Внешний фрейм-контейнер — центрируется в окне
+    center_container = tk.Frame(select_win)
+    center_container.pack(pady=5, expand=True)  # expand=True → центр по вертикали/горизонтали
+
+    # Внутренний фрейм — версии внутри него по левому краю
+    radio_frame = tk.Frame(center_container)
+    radio_frame.pack()
+
+    for ver in version_list:
+        # Без "INS" / "INST" — только номер версии
+        label_text = ver
+        if ver == current_ver:
+            label_text += "  ◀ текущая"
+
+        rb = tk.Radiobutton(
+            radio_frame,
+            text=label_text,
+            variable=version_var_local,
+            value=ver,
+            anchor="w",  # текст внутри кнопки — по левому краю
+            font=("TkDefaultFont", 9, "bold" if ver == current_ver else "normal")
+        )
+        rb.pack(anchor="w", pady=2)  # кнопки прижаты влево внутри фрейма
+
+    # === Кнопки ===
+    def on_select():
+        selected_ver = version_var_local.get()
+        if not selected_ver:
+            return
+        select_win.destroy()
+        apply_task_version(task_id, selected_ver)
+
+    def on_cancel():
+        select_win.destroy()
+
+    btn_frame = tk.Frame(select_win)
+    btn_frame.pack(pady=10)
+    tk.Button(btn_frame, text="Выбрать", command=on_select, width=12).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Отмена", command=on_cancel, width=12).pack(side="left", padx=5)
+
+
+def apply_task_version(task_id, selected_version):
+    """Применяет настройки конкретной версии для задачи."""
+    data = load_data()
+    tasks = data.get("tasks", {})
+    task_info = tasks.get(task_id)
+
+    if not task_info:
+        return
+
+    versions = task_info.get("versions", {})
+    version_info = versions.get(selected_version)
+
+    if not version_info:
+        messagebox.showerror("Ошибка", f"Информация о версии {selected_version} не найдена.")
+        return
+
+    # Обновляем основные поля задачи на выбранную версию
+    task_info["ini_path"] = version_info["ini_path"]
+    task_info["base_path"] = version_info["base_path"]
+    if "ini_settings" in version_info:
+        task_info["ini_settings"] = version_info["ini_settings"]
+
+    # Перемещаем задачу наверх
+    tasks.pop(task_id)
+    tasks = {task_id: task_info, **tasks}
+    data["tasks"] = tasks
+    save_data(data)
+
+    task_id_combobox['values'] = list(tasks.keys())
+
+    # Применяем путь
+    path_var.set(version_info["ini_path"])
+    apply_path(update_task=False)
+
+    # Применяем INI-настройки
+    ini_settings = version_info.get("ini_settings", {})
+    ini_path_from_version = version_info["ini_path"]
+    rk7srv_ini_path = os.path.join(ini_path_from_version, "rk7srv.INI")
+
+    if "UseDBSync" in ini_settings:
+        for filename, value in ini_settings["UseDBSync"].items():
+            full_path = os.path.join(ini_path_from_version, filename)
+            if os.path.exists(full_path):
+                update_ini_file(full_path, str(value), "UseDBSync")
+
+    if "UseSQL" in ini_settings:
+        if os.path.exists(rk7srv_ini_path):
+            update_ini_file(rk7srv_ini_path, str(ini_settings["UseSQL"]), "USESQL")
+
+    if "Station" in ini_settings and "Server" in ini_settings:
+        station_var.set(ini_settings["Station"])
+        server_var.set(ini_settings["Server"])
+        save_wincash_params()
+
+    base_path = version_info.get("base_path", "")
+    if base_path and os.path.exists(rk7srv_ini_path):
+        base_dir = os.path.basename(base_path)
+        update_rk7srv_ini(rk7srv_ini_path, base_dir)
+
+    on_check()
+
+    # messagebox.showinfo("Версия применена",
+       # f"Задача {task_id} переключена на версию {selected_version}")
 
 # Фрейм для метки, кнопки "Открыть" и поля для номера задачи
 label_and_open_frame = tk.Frame(settings_tab)
@@ -825,33 +1224,80 @@ def delete_task():
         messagebox.showwarning("Предупреждение", f"Задача {selected_task_id} не найдена!")
         return
 
-    # Получаем путь к папке, чтобы показать его пользователю и удалить
-    task_base_path = get_current_task_base_path(selected_task_id)
+    task_info = tasks[selected_task_id]
 
-    # Формируем более информативное сообщение для подтверждения
+    # === Собираем ВСЕ пути base (основной + из всех версий) ===
+    all_base_paths = set()
+
+    # Основной base_path
+    main_base = task_info.get("base_path")
+    if main_base:
+        all_base_paths.add(os.path.normpath(main_base))
+
+    # base_path из каждой версии
+    versions = task_info.get("versions", {})
+    for ver_name, ver_info in versions.items():
+        ver_base = ver_info.get("base_path")
+        if ver_base:
+            all_base_paths.add(os.path.normpath(ver_base))
+
+    # === Формируем сообщение для подтверждения ===
+    existing_paths = [p for p in all_base_paths if os.path.exists(p)]
+
     confirm_msg = f"Удалить задачу {selected_task_id} из списка?"
-    if task_base_path and os.path.exists(task_base_path):
-        confirm_msg += f"\n\nСвязанная папка ТАКЖЕ БУДЕТ УДАЛЕНА:\n{task_base_path}"
+    if existing_paths:
+        paths_list = "\n".join(existing_paths)
+        confirm_msg += (
+            f"\n\nБудут удалены папки ({len(existing_paths)} шт.):\n{paths_list}"
+        )
+    if versions:
+        ver_list = ", ".join(versions.keys())
+        confirm_msg += f"\n\nВерсии RK в задаче: {ver_list}"
 
-    if messagebox.askyesno("Подтверждение удаления", confirm_msg):
-        # Шаг 1: Пытаемся удалить папку с диска (если она есть)
-        if task_base_path and os.path.exists(task_base_path):
-            try:
-                shutil.rmtree(task_base_path)
-                print(f"Папка {task_base_path} успешно удалена.")
-            except Exception as e:
-                messagebox.showerror("Ошибка", f"Не удалось удалить папку задачи:\n{e}\n\nЗапись о задаче не будет удалена.")
-                return  # Важно: прерываем операцию, если не удалось удалить папку
+    if not messagebox.askyesno("Подтверждение удаления", confirm_msg):
+        return
 
-        # Шаг 2: Если удаление папки прошло успешно (или папки не было), удаляем запись из JSON
-        del tasks[selected_task_id]
-        data["tasks"] = tasks
-        save_data(data)
-        
-        # Шаг 3: Обновляем интерфейс
-        task_id_combobox['values'] = load_task_ids()
-        task_id_var.set("")
-        messagebox.showinfo("Успех", f"Задача {selected_task_id} и связанные с ней данные удалены!")
+    # === Шаг 1: Удаляем ВСЕ папки base с диска ===
+    failed_paths = []
+    deleted_paths = []
+
+    for base_path in existing_paths:
+        try:
+            shutil.rmtree(base_path)
+            deleted_paths.append(base_path)
+            print(f"Папка удалена: {base_path}")
+        except Exception as e:
+            failed_paths.append((base_path, str(e)))
+            print(f"Ошибка удаления {base_path}: {e}")
+
+    # Если хотя бы одна папка не удалилась — предупреждаем, но продолжаем
+    if failed_paths:
+        error_details = "\n".join(f"• {p}: {err}" for p, err in failed_paths)
+        action = messagebox.askyesno(
+            "Частичная ошибка",
+            f"Не удалось удалить некоторые папки:\n{error_details}\n\n"
+            f"Всё равно удалить запись о задаче из списка?"
+        )
+        if not action:
+            return
+
+    # === Шаг 2: Удаляем запись из JSON ===
+    del tasks[selected_task_id]
+    data["tasks"] = tasks
+    save_data(data)
+
+    # === Шаг 3: Обновляем интерфейс ===
+    task_id_combobox['values'] = load_task_ids()
+    task_id_var.set("")
+
+    # Формируем итоговое сообщение
+    result_msg = f"Задача {selected_task_id} удалена!"
+    if deleted_paths:
+        result_msg += f"\n\nУдалено папок: {len(deleted_paths)}"
+    if failed_paths:
+        result_msg += f"\nНе удалось удалить: {len(failed_paths)}"
+
+    messagebox.showinfo("Успех", result_msg)
 
 
 # Кнопка "Сохранить"
@@ -1696,19 +2142,23 @@ def show_product_folders():
 check_folder_frame = tk.Frame(settings_tab)
 check_folder_frame.pack(padx=10, pady=10, anchor="w", fill="x")
 
-# Первый ряд: "Проверить файлы", "Clear MIDBASE", "Clear Base"
-check_btn = tk.Button(check_folder_frame, text="Проверить файлы", command=on_check_with_message)
+# Первый ряд: "Открыть задачу в SD", "Clear MIDBASE", "Clear Base"
+check_btn = tk.Button(check_folder_frame, text="Открыть задачу в SD", command=open_task_in_sd)
 check_btn.grid(row=0, column=0, padx=5, sticky="ew")
 
-show_folders_btn = tk.Button(check_folder_frame, text="Clear MIDBASE", command=delete_midbase_files)
+show_folders_btn = tk.Button(check_folder_frame, text="Очистить MIDBASE", command=delete_midbase_files)
 show_folders_btn.grid(row=0, column=1, padx=5, sticky="ew")
 
-clear_base_btn = tk.Button(check_folder_frame, text="Clear Base", command=delete_unwanted_files)
+clear_base_btn = tk.Button(check_folder_frame, text="Очистить Base", command=delete_unwanted_files)
 clear_base_btn.grid(row=0, column=2, padx=5, sticky="ew")
 
 # Второй ряд: "Удалить задачу" (под "Проверить файлы")
 delete_task_btn = tk.Button(check_folder_frame, text="Удалить задачу", command=delete_task)
 delete_task_btn.grid(row=1, column=0, padx=5, sticky="ew", pady=(5, 0))
+
+# Кнопка "Сменить версию RK" (рядом с "Удалить задачу")
+change_version_btn = tk.Button(check_folder_frame, text="Сменить версию RK", command=change_rk_version)
+change_version_btn.grid(row=1, column=1, padx=5, sticky="ew", pady=(5, 0))
 
 # Настройка весов строк и столбцов для равномерного распределения
 check_folder_frame.grid_columnconfigure(0, weight=1)
