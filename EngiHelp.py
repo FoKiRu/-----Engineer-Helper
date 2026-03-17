@@ -25,7 +25,7 @@ import ctypes
 import webbrowser
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.0.1"
+SCRIPT_VERSION = "v1.1.1"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -467,6 +467,56 @@ def update_ini_file(filepath, value, key):
         traceback.print_exc()
         return False
 
+def update_rkeeper_ini_basepath(ini_path, midbase_folder_name):
+    """Обновляет параметр BasePath в секции [Config] файла RKEEPER.INI."""
+    rkeeper_path = os.path.join(ini_path, "RKEEPER.INI")
+    if not os.path.isfile(rkeeper_path):
+        print(f"[WARN] RKEEPER.INI не найден: {rkeeper_path}")
+        return False
+    try:
+        try:
+            with open(rkeeper_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            with open(rkeeper_path, 'r', encoding='cp1251') as f:
+                lines = f.readlines()
+
+        new_lines = []
+        updated = False
+        for line in lines:
+            if re.match(r'^\s*BasePath\s*=', line, re.IGNORECASE):
+                new_lines.append(f"BasePath = ..\\..\\{midbase_folder_name}\n")
+                updated = True
+            else:
+                new_lines.append(line)
+
+        # Если параметр не найден — добавляем в секцию [Config]
+        if not updated:
+            final_lines = []
+            in_config = False
+            inserted = False
+            for line in new_lines:
+                final_lines.append(line)
+                if re.match(r'^\s*\[Config\]\s*$', line, re.IGNORECASE):
+                    in_config = True
+                elif in_config and re.match(r'^\s*\[', line) and not inserted:
+                    # Вставляем перед следующей секцией
+                    final_lines.insert(-1, f"BasePath = ..\\..\\{midbase_folder_name}\n")
+                    inserted = True
+                    in_config = False
+            if not inserted:
+                final_lines.append(f"BasePath = ..\\..\\{midbase_folder_name}\n")
+            new_lines = final_lines
+
+        with open(rkeeper_path, 'w', encoding='cp1251') as f:
+            f.writelines(new_lines)
+
+        print(f"[OK] RKEEPER.INI обновлён: BasePath = ..\\..\\{midbase_folder_name}")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Ошибка обновления RKEEPER.INI: {e}")
+        return False
+
 def check_files():
     found, missing = [], []
     for filename in FILES:
@@ -538,6 +588,19 @@ def open_explorer_to_root():
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось открыть проводник:\n{e}")
 
+def apply_path_silent():
+    """
+    Обновляет глобальные переменные ini_path и INI_FILE_USESQL
+    по текущему значению path_var БЕЗ автозагрузки задачи.
+    Используется при переключении между задачами одной версии.
+    """
+    global ini_path, INI_FILE_USESQL
+    new_path = path_var.get()
+    if os.path.isdir(new_path):
+        ini_path = new_path
+        INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
+        save_settings_and_path(ini_path)
+
 def on_task_selected(event):
     selected_task_id = task_id_var.get()
     if not selected_task_id:
@@ -554,31 +617,27 @@ def on_task_selected(event):
     # === ПРОВЕРКА НА НЕСКОЛЬКО ВЕРСИЙ ===
     versions = task_info.get("versions", {})
     if len(versions) > 1:
-        # Показываем диалог выбора версии
         show_version_selection_dialog(selected_task_id, task_info, versions)
         return
-    # === КОНЕЦ ПРОВЕРКИ ===
 
     # --- ЛОГИКА ПЕРЕМЕЩЕНИЯ ЗАДАЧИ НАВЕРХ ---
     if list(tasks.keys())[0] != selected_task_id:
-        print(f"Перемещаем задачу {selected_task_id} наверх списка.")
         selected_task_info = tasks.pop(selected_task_id)
         sorted_tasks = {selected_task_id: selected_task_info, **tasks}
         data["tasks"] = sorted_tasks
         save_data(data)
         task_id_combobox['values'] = list(sorted_tasks.keys())
         tasks = sorted_tasks
-    # --- КОНЕЦ ЛОГИКИ ---
 
     task_info = tasks[selected_task_id]
 
     # --- ОБНОВЛЕНИЕ ГЛАВНОГО ПУТИ ---
     task_ini_path = task_info.get("ini_path")
-    if task_ini_path and path_var.get() != task_ini_path:
-        print(f"Смена пути на сохраненный в задаче: {task_ini_path}")
+    if task_ini_path:
+        # ИСПРАВЛЕНИЕ БАГА: всегда применяем путь и настройки,
+        # даже если путь совпадает с текущим
         path_var.set(task_ini_path)
-        apply_path(update_task=False)
-    # --- КОНЕЦ ---
+        apply_path_silent()  # Обновляем глобальные переменные без автозагрузки задачи
 
     if "ini_settings" not in task_info:
         return
@@ -591,24 +650,39 @@ def on_task_selected(event):
         messagebox.showerror("Ошибка", f"Файл rk7srv.INI не найден:\n{rk7srv_ini_path}")
         return
 
+    # Применяем UseDBSync
     if "UseDBSync" in ini_settings:
         for filename, value in ini_settings["UseDBSync"].items():
             full_path = os.path.join(ini_path_from_task, filename)
             if os.path.exists(full_path):
                 update_ini_file(full_path, str(value), "UseDBSync")
 
+    # Применяем UseSQL
     if "UseSQL" in ini_settings:
         update_ini_file(rk7srv_ini_path, str(ini_settings["UseSQL"]), "USESQL")
 
+    # Применяем Station/Server
     if "Station" in ini_settings and "Server" in ini_settings:
+        # Временно отключаем trace чтобы не было двойного сохранения
         station_var.set(ini_settings["Station"])
         server_var.set(ini_settings["Server"])
         save_wincash_params()
 
+    # Применяем base_path
     base_path = task_info.get("base_path", "")
     if base_path:
         base_dir = os.path.basename(base_path)
         update_rk7srv_ini(rk7srv_ini_path, base_dir)
+
+    # === ПРИМЕНЯЕМ midbase_path ===
+    midbase_path = task_info.get("midbase_path", "")
+    if midbase_path:
+        midbase_folder_name = os.path.basename(midbase_path)
+        update_rkeeper_ini_basepath(ini_path_from_task, midbase_folder_name)
+        print(f"[OK] Применён MIDBASE: {midbase_folder_name}")
+
+    # Обновляем чекбоксы в UI
+    on_check()
 
     print(f"Параметры для задачи {selected_task_id} применены!")
 
@@ -822,6 +896,47 @@ def perform_version_change(task_id, current_version, target_version):
         messagebox.showerror("Ошибка", f"Не удалось скопировать base:\n{e}")
         return
 
+    # === Копируем MIDBASE_(task_id) в целевую версию ===
+    current_midbase = task_info.get("midbase_path")
+    target_midbase_path = None
+
+    if current_midbase and os.path.isdir(current_midbase):
+        midbase_folder_name = os.path.basename(current_midbase)
+        target_midbase_path = os.path.join(target_product_root, midbase_folder_name)
+        try:
+            if os.path.exists(target_midbase_path):
+                shutil.rmtree(target_midbase_path)
+            shutil.copytree(current_midbase, target_midbase_path)
+            print(f"MIDBASE скопирована: {current_midbase} -> {target_midbase_path}")
+        except Exception as e:
+            print(f"Ошибка копирования MIDBASE: {e}")
+            target_midbase_path = None
+
+    # При сохранении версий добавляем midbase_path:
+    if current_version not in task_info["versions"]:
+        ver_entry = {
+            "ini_path": current_ini_path,
+            "base_path": current_base_path,
+            "ini_settings": task_info.get("ini_settings", {})
+        }
+        if current_midbase:
+            ver_entry["midbase_path"] = current_midbase
+        task_info["versions"][current_version] = ver_entry
+
+    target_ver_entry = {
+        "ini_path": target_ini_path_normalized,
+        "base_path": target_base_path.replace("\\", "/"),
+        "ini_settings": task_info.get("ini_settings", {}).copy()
+    }
+    if target_midbase_path:
+        target_ver_entry["midbase_path"] = target_midbase_path.replace("\\", "/")
+
+    task_info["versions"][target_version] = target_ver_entry
+    task_info["ini_path"] = target_ini_path_normalized
+    task_info["base_path"] = target_base_path.replace("\\", "/")
+    if target_midbase_path:
+        task_info["midbase_path"] = target_midbase_path.replace("\\", "/")
+
     # Копируем .ini файлы в целевую bin/win
     copied_files = []
     for f in FILES:
@@ -978,13 +1093,14 @@ def apply_task_version(task_id, selected_version):
         messagebox.showerror("Ошибка", f"Информация о версии {selected_version} не найдена.")
         return
 
-    # Обновляем основные поля задачи на выбранную версию
     task_info["ini_path"] = version_info["ini_path"]
     task_info["base_path"] = version_info["base_path"]
     if "ini_settings" in version_info:
         task_info["ini_settings"] = version_info["ini_settings"]
+    # Переносим midbase_path если есть
+    if "midbase_path" in version_info:
+        task_info["midbase_path"] = version_info["midbase_path"]
 
-    # Перемещаем задачу наверх
     tasks.pop(task_id)
     tasks = {task_id: task_info, **tasks}
     data["tasks"] = tasks
@@ -992,11 +1108,9 @@ def apply_task_version(task_id, selected_version):
 
     task_id_combobox['values'] = list(tasks.keys())
 
-    # Применяем путь
     path_var.set(version_info["ini_path"])
-    apply_path(update_task=False)
+    apply_path_silent()
 
-    # Применяем INI-настройки
     ini_settings = version_info.get("ini_settings", {})
     ini_path_from_version = version_info["ini_path"]
     rk7srv_ini_path = os.path.join(ini_path_from_version, "rk7srv.INI")
@@ -1021,10 +1135,13 @@ def apply_task_version(task_id, selected_version):
         base_dir = os.path.basename(base_path)
         update_rk7srv_ini(rk7srv_ini_path, base_dir)
 
-    on_check()
+    # === MIDBASE ===
+    midbase_path = version_info.get("midbase_path", "")
+    if midbase_path:
+        midbase_folder_name = os.path.basename(midbase_path)
+        update_rkeeper_ini_basepath(ini_path_from_version, midbase_folder_name)
 
-    # messagebox.showinfo("Версия применена",
-       # f"Задача {task_id} переключена на версию {selected_version}")
+    on_check()
 
 # Фрейм для метки, кнопки "Открыть" и поля для номера задачи
 label_and_open_frame = tk.Frame(settings_tab)
@@ -1115,50 +1232,38 @@ def save_task_id():
         messagebox.showerror("Ошибка", f"Папка {base_path} не найдена!")
         return
 
-    # Проверяем, запущен ли процесс refsrv.exe
-    refsrv_running = False
-    for proc in psutil.process_iter(['name']):
-        if proc.info['name'].lower() == "refsrv.exe":
-            refsrv_running = True
-            break
+    # Проверяем блокировку refsrv.exe
+    refsrv_running = any(
+        p.info['name'].lower() == "refsrv.exe"
+        for p in psutil.process_iter(['name'])
+    )
 
     if refsrv_running:
-        messagebox.showwarning(
-            "Предупреждение",
-            "Процесс refsrv.exe запущен и может блокировать файлы.\n"
-            "Сначала будет attempted копирование файла rk7.udb для проверки."
-        )
-
-    # Пробуем скопировать rk7.udb для проверки блокировки
-    test_file = os.path.join(base_path, "rk7.udb")
-    if os.path.exists(test_file):
-        try:
-            shutil.copy2(test_file, os.path.join(product_root, "rk7.udb.test"))
-            os.remove(os.path.join(product_root, "rk7.udb.test"))
-        except PermissionError:
-            if messagebox.askyesno(
-                "Предупреждение",
-                "Файлы в папке base заблокированы процессом refsrv.exe.\n"
-                "Закрыть процесс и продолжить?"
-            ):
-                for proc in psutil.process_iter(['name']):
-                    if proc.info['name'].lower() == "refsrv.exe":
-                        proc.terminate()
-                        time.sleep(1)  # Даем время на завершение процесса
-            else:
+        test_file = os.path.join(base_path, "rk7.udb")
+        if os.path.exists(test_file):
+            try:
+                shutil.copy2(test_file, os.path.join(product_root, "rk7.udb.test"))
+                os.remove(os.path.join(product_root, "rk7.udb.test"))
+            except PermissionError:
+                if messagebox.askyesno(
+                    "Предупреждение",
+                    "Файлы в папке base заблокированы процессом refsrv.exe.\n"
+                    "Закрыть процесс и продолжить?"
+                ):
+                    for proc in psutil.process_iter(['name']):
+                        if proc.info['name'].lower() == "refsrv.exe":
+                            proc.terminate()
+                            time.sleep(1)
+                else:
+                    return
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось проверить блокировку:\n{e}")
                 return
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось проверить блокировку файлов:\n{e}")
-            return
 
-    # Формируем имя для копии папки
+    # === Папка base_(task_id) ===
     new_base_path = os.path.join(product_root, f"base_{task_id}")
-    # Проверяем, существует ли уже папка с таким именем
     if os.path.exists(new_base_path):
-        if messagebox.askyesno(
-            "Предупреждение",
-            f"Папка {new_base_path} уже существует. Перезаписать?"
-        ):
+        if messagebox.askyesno("Предупреждение", f"Папка {new_base_path} уже существует. Перезаписать?"):
             try:
                 shutil.rmtree(new_base_path)
             except Exception as e:
@@ -1167,44 +1272,73 @@ def save_task_id():
         else:
             return
 
-    # Копируем папку base
     try:
         shutil.copytree(base_path, new_base_path)
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось скопировать папку base:\n{e}")
         return
-    
+
+    # === Папка MIDBASE_(task_id) - ВСЕГДА СОЗДАЁТСЯ ПУСТОЙ ===
+    midbase_folder_name = f"MIDBASE_{task_id}"
+    midbase_path = os.path.join(product_root, midbase_folder_name)
+
+    if os.path.exists(midbase_path):
+        if not messagebox.askyesno(
+            "Предупреждение",
+            f"Папка {midbase_path} уже существует. Перезаписать?"
+        ):
+            return
+        else:
+            try:
+                shutil.rmtree(midbase_path)
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось удалить {midbase_path}:\n{e}")
+                return
+
+    # Создаём пустую папку MIDBASE
+    try:
+        os.makedirs(midbase_path, exist_ok=True)
+        print(f"[OK] Создана пустая папка MIDBASE: {midbase_path}")
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось создать папку MIDBASE:\n{e}")
+        return
+
+    # Обновляем BasePath в RKEEPER.INI
+    update_rkeeper_ini_basepath(path_var.get(), midbase_folder_name)
+
     # Собираем параметры INI
     ini_settings = get_ini_settings(path_var.get())
 
-    # Путь к файлу tasks.json в папке "Документы"
-    # Загружаем существующие задачи, если файл существует
+    # Сохраняем в JSON
     data = load_data()
     tasks = data.get("tasks", {})
 
-    # Добавляем новую задачу с параметрами INI
-    tasks[task_id] = {
+    task_entry = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "base_path": new_base_path,
+        "base_path": new_base_path.replace("\\", "/"),
+        "midbase_path": midbase_path.replace("\\", "/"),
         "ini_path": path_var.get().replace("\\", "/"),
         "status": "copied",
-        "ini_settings": ini_settings  # Сохраняем параметры
+        "ini_settings": ini_settings
     }
 
-    # Перемещаем текущую задачу в начало словаря
+    tasks[task_id] = task_entry
     tasks = {task_id: tasks[task_id], **{k: v for k, v in tasks.items() if k != task_id}}
-
-    # Обновляем задачи в основной структуре данных
     data["tasks"] = tasks
-
-    # Сохраняем обновлённый список задач
     save_data(data)
 
     task_id_combobox['values'] = load_task_ids()
-    messagebox.showinfo("Успех", f"Папка base успешно скопирована как {new_base_path}!\nИнформация о задаче сохранена в tasks.json.")
-    base_dir = os.path.basename(new_base_path)  # Например, "base_666"
+
+    # Обновляем rk7srv.INI
+    base_dir = os.path.basename(new_base_path)
     rk7srv_ini_path = os.path.join(path_var.get(), "rk7srv.INI")
     update_rk7srv_ini(rk7srv_ini_path, base_dir)
+
+    messagebox.showinfo(
+        "Успех",
+        f"Папка base скопирована как {new_base_path}!\n"
+        f"Пустая папка MIDBASE создана: {midbase_path}"
+    )
 
 # Загрузка номеров задач
 def load_task_ids():
@@ -1226,23 +1360,32 @@ def delete_task():
 
     task_info = tasks[selected_task_id]
 
-    # === Собираем ВСЕ пути base (основной + из всех версий) ===
-    all_base_paths = set()
+    # === Собираем ВСЕ пути base и midbase (основной + из всех версий) ===
+    all_paths = set()
 
     # Основной base_path
     main_base = task_info.get("base_path")
     if main_base:
-        all_base_paths.add(os.path.normpath(main_base))
+        all_paths.add(os.path.normpath(main_base))
 
-    # base_path из каждой версии
+    # Основной midbase_path
+    main_midbase = task_info.get("midbase_path")
+    if main_midbase:
+        all_paths.add(os.path.normpath(main_midbase))
+
+    # base_path и midbase_path из каждой версии
     versions = task_info.get("versions", {})
     for ver_name, ver_info in versions.items():
         ver_base = ver_info.get("base_path")
         if ver_base:
-            all_base_paths.add(os.path.normpath(ver_base))
+            all_paths.add(os.path.normpath(ver_base))
+        
+        ver_midbase = ver_info.get("midbase_path")
+        if ver_midbase:
+            all_paths.add(os.path.normpath(ver_midbase))
 
     # === Формируем сообщение для подтверждения ===
-    existing_paths = [p for p in all_base_paths if os.path.exists(p)]
+    existing_paths = [p for p in all_paths if os.path.exists(p)]
 
     confirm_msg = f"Удалить задачу {selected_task_id} из списка?"
     if existing_paths:
@@ -1257,18 +1400,18 @@ def delete_task():
     if not messagebox.askyesno("Подтверждение удаления", confirm_msg):
         return
 
-    # === Шаг 1: Удаляем ВСЕ папки base с диска ===
+    # === Шаг 1: Удаляем ВСЕ папки base и midbase с диска ===
     failed_paths = []
     deleted_paths = []
 
-    for base_path in existing_paths:
+    for path in existing_paths:
         try:
-            shutil.rmtree(base_path)
-            deleted_paths.append(base_path)
-            print(f"Папка удалена: {base_path}")
+            shutil.rmtree(path)
+            deleted_paths.append(path)
+            print(f"Папка удалена: {path}")
         except Exception as e:
-            failed_paths.append((base_path, str(e)))
-            print(f"Ошибка удаления {base_path}: {e}")
+            failed_paths.append((path, str(e)))
+            print(f"Ошибка удаления {path}: {e}")
 
     # Если хотя бы одна папка не удалилась — предупреждаем, но продолжаем
     if failed_paths:
@@ -1510,19 +1653,60 @@ def check_program_process():
 """
 
 # ======================= Удаление MIDBASE =======================
+def get_task_data(task_id):
+    """Получает данные задачи из JSON конфигурации"""
+    try:
+        with open(DATA_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data.get(task_id)
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось прочитать конфигурацию:\n{e}")
+        return None
+
 def delete_midbase_files():
-    parent_path = os.path.dirname(os.path.dirname(ini_path))
-    midbase_path = os.path.normpath(os.path.join(parent_path, "MIDBASE")).replace("\\", "/")
+    selected_task_id = task_id_var.get().strip()
+    if not selected_task_id:
+        messagebox.showwarning("Внимание", "Сначала выберите задачу, для которой нужно удалить MIDBASE.")
+        return
+
+    # Получаем данные из JSON
+    base_path = get_current_task_base_path(selected_task_id)
+    
+    if not base_path:
+        messagebox.showerror("Ошибка", f"Задача {selected_task_id} не найдена.")
+        return
+    
+    # Если есть в JSON - берём оттуда
+    task_data = get_task_data(selected_task_id)
+    midbase_path = task_data.get("midbase_path") if task_data else None
+    
+    # Если в JSON нет - строим путь автоматически
+    if not midbase_path:
+        parent_path = os.path.dirname(base_path)
+        midbase_path = os.path.normpath(os.path.join(parent_path, f"MIDBASE_{selected_task_id}")).replace("\\", "/")
 
     if not os.path.isdir(midbase_path):
         messagebox.showerror("Ошибка", f"Папка MIDBASE не найдена:\n{midbase_path}")
         return
 
-    confirm_deletion_midbase(midbase_path)
+    # Для MIDBASE нет защищённых файлов - удаляем всё
+    protected_files = []
 
-def confirm_deletion_midbase(midbase_path):
+    # Создаем колбэки с уже определенным путем
+    callback_with_backup = partial(proceed_with_backup_and_deletion, midbase_path, protected_files)
+    callback_without_backup = partial(proceed_with_deletion, protected_files, midbase_path, backup_path=None)
+
+    # Вызываем окно подтверждения (используем существующую функцию)
+    confirm_deletion_with_options(
+        protected_files,
+        midbase_path,
+        callback_with_backup,
+        callback_without_backup
+    )
+    
+def confirm_deletion_with_options(protected_files, base_path, callback_with_backup, callback_without_backup):
     win = tk.Toplevel(root)
-    win.title("Подтверждение удаления")
+    win.title("Подтверждение очистки")
     win.transient(root)
     win.grab_set()
     win.focus_force()
@@ -1531,12 +1715,18 @@ def confirm_deletion_midbase(midbase_path):
         win.iconbitmap(icon_path)
 
     win.update_idletasks()
-    w, h = 360, 122
+    w = 380
+    h = 180
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
 
-    msg = "Вы действительно хотите удалить всё содержимое папки MIDBASE?"
+    msg = f"Вы действительно хотите очистить папку:\n{base_path}"
+    
+    # Добавляем информацию о защищённых файлах только если они есть
+    if protected_files:
+        msg += f"\n\nБудут оставлены: {', '.join(protected_files)}"
+    
     tk.Label(win, text=msg, justify="left", wraplength=w-20).pack(padx=10, pady=(10, 5))
 
     do_backup_var = tk.BooleanVar(value=False)
@@ -1548,11 +1738,11 @@ def confirm_deletion_midbase(midbase_path):
     def on_delete():
         win.destroy()
         if do_backup_var.get():
-            proceed_with_backup_and_deletion(midbase_path, [])
+            callback_with_backup()
         else:
-            proceed_with_deletion([], midbase_path, backup_path=None)
+            callback_without_backup()
 
-    tk.Button(btn_frame, text="Удалить", command=on_delete).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Очистить", command=on_delete).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=win.destroy).pack(side="left", padx=5)
 
 # ======================= Удаление base =======================
