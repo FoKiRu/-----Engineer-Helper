@@ -25,20 +25,22 @@ import ctypes
 import webbrowser
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.1.1"
+SCRIPT_VERSION = "v1.2.1"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
-    "EngiHelp — инструмент для работы с INI-файлами R-Keeper.\n"
-    "Возможности:\n"
-    "- Управление UseDBSync и UseSQL в INI-файлах\n"
-    "- Автоматическая синхронизация параметров Station и Server из wincash.ini и RKEEPER.INI с учётом времени изменений\n"
-    "- Проверка и копирование необходимых INI-файлов\n"
-    "- Удобный выбор и сохранение пути к каталогу R-Keeper\n"
-    "- Запуск и остановка ключевых сервисов (refsrv.exe, midserv.exe, rk7man.exe, wincash.bat и др.)\n"
-    "- Очистка папки base с сохранением важных файлов\n"
-    "- Поддержка мультиконфигураций через EngiHelp_config.json\n"
-    "- Автообновление интерфейса по текущим файлам конфигурации\n"
+    "EngiHelp — утилита для быстрого управления настройками R-Keeper.\n"
+    "С её помощью можно:\n"
+    "- находить и открывать нужный каталог R-Keeper\n"
+    "- просматривать и редактировать INI-файлы\n"
+    "- включать и отключать UseDBSync и UseSQL\n"
+    "- автоматически синхронизировать параметры Station и Server\n"
+    "- копировать недостающие INI-файлы из папки bin\\win\\ini\n"
+    "- сохранять и удалять задачи с привязкой к базе и MIDBASE\n"
+    "- очищать папки base и MIDBASE с возможностью резервной копии\n"
+    "- запускать и останавливать основные сервисы R-Keeper\n"
+    "- переключать версию RK и переносить данные между версиями\n"
+    "- автоматически сохранять последние пути и настройки\n"
 )
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
 DATA_FILE = os.path.join(str(Path.home()), "Documents", "EngiHelp_data.json")
@@ -193,7 +195,7 @@ if icon_path:
 
 # Размеры главного окна
 WINDOW_WIDTH = 397
-WINDOW_HEIGHT = 444
+WINDOW_HEIGHT = 430
 WINDOW_OFFSET_X = 230
 WINDOW_OFFSET_Y = 140
 
@@ -2149,11 +2151,31 @@ tk.Button(frame_win_cash, text="❌", command=kill_doscash_process, width=2)\
 usesql_var = tk.IntVar(value=int(get_usesql_value()))
 usedbsync_var = tk.IntVar(value=int(detect_consensus_value()))
 
-usesql_cb = tk.Checkbutton(settings_tab, variable=usesql_var, text="UseSQL", command=toggle_usesql, anchor="w", width=20, justify='left')
-usesql_cb.pack(padx=10, pady=(0, 5), anchor='w')
+flags_frame = tk.Frame(settings_tab)
+flags_frame.pack(padx=10, pady=(0, 5), fill="x")
 
-usedbsync_cb = tk.Checkbutton(settings_tab, variable=usedbsync_var, text="UseDBSync", command=toggle_usedbsync, anchor="w", width=20, justify='left')
-usedbsync_cb.pack(padx=10, pady=(0, 5), anchor='w')
+usesql_cb = tk.Checkbutton(
+    flags_frame,
+    variable=usesql_var,
+    text="UseSQL",
+    command=toggle_usesql,
+    anchor="w"
+)
+usesql_cb.grid(row=0, column=0, sticky="w", padx=(0, 10))
+
+usedbsync_cb = tk.Checkbutton(
+    flags_frame,
+    variable=usedbsync_var,
+    text="UseDBSync",
+    command=toggle_usedbsync,
+    anchor="w"
+)
+usedbsync_cb.grid(row=0, column=1, sticky="w", padx=(0, 10))
+
+# 3-й столбец можно оставить пустым
+flags_frame.grid_columnconfigure(0, weight=1)
+flags_frame.grid_columnconfigure(1, weight=1)
+flags_frame.grid_columnconfigure(2, weight=1)
 
 # ======================= Параметры из wincash.ini =======================
 station_var = tk.StringVar()
@@ -2235,23 +2257,58 @@ def save_wincash_params():
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось сохранить RKEEPER.INI:\n{e}")
 
+def apply_network_ids():
+    task_id = task_id_var.get().strip()
+    if not task_id:
+        messagebox.showwarning("Предупреждение", "Сначала выберите или сохраните задачу!")
+        return
 
+    station_value = station_var.get().strip()
+    server_value = server_var.get().strip()
+
+    data = load_data()
+    tasks = data.get("tasks", {})
+
+    if task_id not in tasks:
+        messagebox.showwarning("Предупреждение", f"Задача {task_id} не найдена в EngiHelp_data.json")
+        return
+
+    # Обновляем ini_settings внутри задачи
+    if "ini_settings" not in tasks[task_id]:
+        tasks[task_id]["ini_settings"] = {}
+
+    tasks[task_id]["ini_settings"]["Station"] = station_value
+    tasks[task_id]["ini_settings"]["Server"] = server_value
+
+    # Если хотите, чтобы в json всегда были актуальные значения в самой задаче
+    data["tasks"] = tasks
+    save_data(data)
+
+    # Дополнительно применяем в реальные ini-файлы
+    save_wincash_params()
+
+    messagebox.showinfo("Успех", f"Данные сохранены для задачи {task_id}")
 
 # === UI ===
 info_frame = tk.LabelFrame(settings_tab, text="Сетевые ID")
-info_frame.pack(padx=10, pady=(5, 10), fill="x")
+info_frame.pack(padx=10, pady=(5, 10), fill="x", ipadx=2, ipady=2)
 
-tk.Label(info_frame, text="MID:").grid(row=0, column=0, sticky="w")
-tk.Entry(info_frame, textvariable=server_var).grid(row=0, column=1, sticky="ew", padx=5)
+tk.Label(info_frame, text="MID:").grid(row=0, column=0, sticky="w", padx=(5, 0), pady=3)
+tk.Entry(info_frame, textvariable=server_var).grid(row=0, column=1, sticky="ew", padx=5, pady=3)
 
-tk.Label(info_frame, text="CASH:").grid(row=1, column=0, sticky="w")
-tk.Entry(info_frame, textvariable=station_var).grid(row=1, column=1, sticky="ew", padx=5)
+tk.Label(info_frame, text="CASH:").grid(row=1, column=0, sticky="w", padx=(5, 0), pady=3)
+tk.Entry(info_frame, textvariable=station_var).grid(row=1, column=1, sticky="ew", padx=5, pady=3)
 
-# Автосохранение при любом изменении
+apply_btn = tk.Button(info_frame, text="Применить", command=apply_network_ids)
+apply_btn.grid(row=0, column=2, rowspan=2, sticky="ns", padx=(8, 5), pady=5)
+
+info_frame.grid_columnconfigure(1, weight=1)
+info_frame.grid_columnconfigure(2, minsize=90)
+
+# Автосохранение при любом изменении (если хотите оставить)
 station_var.trace_add("write", lambda *args: save_wincash_params())
 server_var.trace_add("write", lambda *args: save_wincash_params())
 
-info_frame.grid_columnconfigure(1, weight=1)
 
 
 # Автозагрузка значений при старте
