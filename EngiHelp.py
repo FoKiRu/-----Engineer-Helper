@@ -25,7 +25,7 @@ import ctypes
 import webbrowser
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.2.1"
+SCRIPT_VERSION = "v1.2.3"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -275,8 +275,10 @@ def extract_task_id_from_rk7srv_ini(ini_path):
         with open(ini_path, 'r', encoding='cp1251') as file:
             for line in file:
                 line = line.strip()
+                # Ищем base_ что угодно (буквы или цифры) до конца пути или символа
                 if line.lower().startswith("udbfile") or line.lower().startswith("workmodules"):
-                    match = re.search(r'base_(\d+)', line)
+                    # [a-zA-Z0-9_]+ захватывает и цифры, и буквы, и подчеркивания
+                    match = re.search(r'base_([a-zA-Z0-9_]+)', line)
                     if match:
                         return match.group(1)
     except Exception as e:
@@ -854,7 +856,8 @@ def perform_version_change(task_id, current_version, target_version):
     """Выполняет перенос базы задачи в другую версию RK."""
     data = load_data()
     tasks = data.get("tasks", {})
-    task_info = tasks[task_id]
+    task_info = tasks.get(task_id)
+    if not task_info: return
 
     current_ini_path = task_info.get("ini_path", path_var.get())
     current_product_root = find_product_root(current_ini_path)
@@ -863,136 +866,87 @@ def perform_version_change(task_id, current_version, target_version):
     # Пути к целевой версии
     target_product_root = os.path.join(parent_dir, f"INST{target_version}")
     target_bin_win = os.path.join(target_product_root, "bin", "win")
+    target_ini_path_normalized = target_bin_win.replace("\\", "/")
 
     if not os.path.isdir(target_bin_win):
-        messagebox.showerror("Ошибка",
-            f"Папка bin/win не найдена в целевой версии:\n{target_bin_win}")
+        messagebox.showerror("Ошибка", f"Папка bin/win не найдена:\n{target_bin_win}")
         return
 
     # Завершаем процессы
-    killed = kill_processes_for_version_change()
-    if killed:
-        print(f"Завершены процессы: {', '.join(killed)}")
+    kill_processes_for_version_change()
 
-    # Получаем путь к base текущей задачи
+    # Пути к base
     current_base_path = task_info.get("base_path")
-    if not current_base_path or not os.path.isdir(current_base_path):
-        messagebox.showerror("Ошибка",
-            f"Папка base для задачи не найдена:\n{current_base_path}")
-        return
+    base_folder_name = os.path.basename(current_base_path)
+    target_base_path = os.path.join(target_product_root, base_folder_name).replace("\\", "/")
 
-    base_folder_name = os.path.basename(current_base_path)  # например base_123
-    target_base_path = os.path.join(target_product_root, base_folder_name)
-
-    # Копируем папку base в целевую версию
-    try:
-        if os.path.exists(target_base_path):
-            if not messagebox.askyesno("Предупреждение",
-                f"Папка уже существует:\n{target_base_path}\n\nПерезаписать?"):
-                return
-            shutil.rmtree(target_base_path)
-
-        shutil.copytree(current_base_path, target_base_path)
-        print(f"Base скопирована: {current_base_path} -> {target_base_path}")
-    except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось скопировать base:\n{e}")
-        return
-
-    # === Копируем MIDBASE_(task_id) в целевую версию ===
+    # MIDBASE
     current_midbase = task_info.get("midbase_path")
     target_midbase_path = None
-
-    if current_midbase and os.path.isdir(current_midbase):
-        midbase_folder_name = os.path.basename(current_midbase)
-        target_midbase_path = os.path.join(target_product_root, midbase_folder_name)
+    
+    if current_midbase:
+        # Определяем путь, где должна быть новая midbase
+        target_midbase_path = os.path.join(target_product_root, os.path.basename(current_midbase)).replace("\\", "/")
+        
+        # Удаляем старую, если есть
+        if os.path.exists(target_midbase_path):
+            shutil.rmtree(target_midbase_path)
+            
+        # Создаем пустую директорию вместо копирования
         try:
-            if os.path.exists(target_midbase_path):
-                shutil.rmtree(target_midbase_path)
-            shutil.copytree(current_midbase, target_midbase_path)
-            print(f"MIDBASE скопирована: {current_midbase} -> {target_midbase_path}")
+            os.makedirs(target_midbase_path)
         except Exception as e:
-            print(f"Ошибка копирования MIDBASE: {e}")
-            target_midbase_path = None
+            messagebox.showerror("Ошибка", f"Не удалось создать пустую папку midbase: {e}")
+            return
 
-    # При сохранении версий добавляем midbase_path:
-    if current_version not in task_info["versions"]:
-        ver_entry = {
-            "ini_path": current_ini_path,
-            "base_path": current_base_path,
-            "ini_settings": task_info.get("ini_settings", {})
-        }
-        if current_midbase:
-            ver_entry["midbase_path"] = current_midbase
-        task_info["versions"][current_version] = ver_entry
 
-    target_ver_entry = {
-        "ini_path": target_ini_path_normalized,
-        "base_path": target_base_path.replace("\\", "/"),
-        "ini_settings": task_info.get("ini_settings", {}).copy()
-    }
-    if target_midbase_path:
-        target_ver_entry["midbase_path"] = target_midbase_path.replace("\\", "/")
 
-    task_info["versions"][target_version] = target_ver_entry
-    task_info["ini_path"] = target_ini_path_normalized
-    task_info["base_path"] = target_base_path.replace("\\", "/")
-    if target_midbase_path:
-        task_info["midbase_path"] = target_midbase_path.replace("\\", "/")
-
-    # Копируем .ini файлы в целевую bin/win
-    copied_files = []
-    for f in FILES:
-        src = os.path.join(current_ini_path, f)
-        dst = os.path.join(target_bin_win, f)
-        if os.path.isfile(src):
-            try:
-                shutil.copy2(src, dst)
-                copied_files.append(f)
-            except Exception as e:
-                print(f"Ошибка копирования {f}: {e}")
-
-    # Обновляем rk7srv.INI в целевой версии
-    target_rk7srv = os.path.join(target_bin_win, "rk7srv.INI")
-    if os.path.isfile(target_rk7srv):
-        update_rk7srv_ini(target_rk7srv, base_folder_name)
-
-    target_ini_path_normalized = target_bin_win.replace("\\", "/")
-
-    # === Сохраняем информацию о версиях в JSON ===
+    # === ОБНОВЛЕНИЕ JSON СТРУКТУРЫ ===
     if "versions" not in task_info:
         task_info["versions"] = {}
 
-    # Сохраняем текущую версию (если ещё не сохранена)
+    # Сохраняем текущую версию в словарь версий, если её там нет
     if current_version not in task_info["versions"]:
         task_info["versions"][current_version] = {
             "ini_path": current_ini_path,
             "base_path": current_base_path,
+            "midbase_path": task_info.get("midbase_path"),
             "ini_settings": task_info.get("ini_settings", {})
         }
 
-    # Сохраняем целевую версию
-    task_info["versions"][target_version] = {
+    # Создаем запись для новой версии
+    new_version_data = {
         "ini_path": target_ini_path_normalized,
-        "base_path": target_base_path.replace("\\", "/"),
+        "base_path": target_base_path,
         "ini_settings": task_info.get("ini_settings", {}).copy()
     }
+    if target_midbase_path:
+        new_version_data["midbase_path"] = target_midbase_path
 
-    # Обновляем основные поля задачи на новую версию
+    task_info["versions"][target_version] = new_version_data
+    
+    # Обновляем основные параметры задачи на новую версию
     task_info["ini_path"] = target_ini_path_normalized
-    task_info["base_path"] = target_base_path.replace("\\", "/")
+    task_info["base_path"] = target_base_path
+    if target_midbase_path:
+        task_info["midbase_path"] = target_midbase_path
 
     tasks[task_id] = task_info
     data["tasks"] = tasks
     save_data(data)
 
+    # Обновляем INI файлы в целевой папке
+    for f in FILES:
+        src = os.path.join(current_ini_path, f)
+        dst = os.path.join(target_bin_win, f)
+        if os.path.isfile(src): shutil.copy2(src, dst)
+
+    update_rk7srv_ini(os.path.join(target_bin_win, "rk7srv.INI"), base_folder_name)
+    
     # Обновляем UI
     path_var.set(target_ini_path_normalized)
     apply_path(update_task=False)
-
-    messagebox.showinfo("Успех",
-        f"База задачи {task_id} перенесена в версию {target_version}.\n\n"
-        f"Скопировано INI-файлов: {len(copied_files)}\n"
-        f"Путь к base: {target_base_path}")
+    messagebox.showinfo("Успех", f"База перенесена в версию {target_version}")
 
 
 # ======================= Выбор версии при переключении задачи =======================
