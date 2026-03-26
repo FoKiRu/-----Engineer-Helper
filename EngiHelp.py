@@ -25,7 +25,7 @@ import ctypes
 import webbrowser
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.2.3"
+SCRIPT_VERSION = "v1.2.4"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -876,9 +876,28 @@ def perform_version_change(task_id, current_version, target_version):
     kill_processes_for_version_change()
 
     # Пути к base
+        # Получаем путь к base текущей задачи
     current_base_path = task_info.get("base_path")
+    if not current_base_path or not os.path.isdir(current_base_path):
+        messagebox.showerror("Ошибка",
+            f"Папка base для задачи не найдена:\n{current_base_path}")
+        return
     base_folder_name = os.path.basename(current_base_path)
     target_base_path = os.path.join(target_product_root, base_folder_name).replace("\\", "/")
+
+        # Копируем папку base в целевую версию
+    try:
+        if os.path.exists(target_base_path):
+            if not messagebox.askyesno("Предупреждение",
+                f"Папка уже существует:\n{target_base_path}\n\nПерезаписать?"):
+                return
+            shutil.rmtree(target_base_path)
+
+        shutil.copytree(current_base_path, target_base_path)
+        print(f"Base скопирована: {current_base_path} -> {target_base_path}")
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось скопировать base:\n{e}")
+        return
 
     # MIDBASE
     current_midbase = task_info.get("midbase_path")
@@ -898,7 +917,6 @@ def perform_version_change(task_id, current_version, target_version):
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось создать пустую папку midbase: {e}")
             return
-
 
 
     # === ОБНОВЛЕНИЕ JSON СТРУКТУРЫ ===
