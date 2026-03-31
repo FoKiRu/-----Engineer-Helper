@@ -23,9 +23,10 @@ import sys
 import tempfile
 import ctypes
 import webbrowser
+import keyboard
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.2.4"
+SCRIPT_VERSION = "v1.2.5"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -1116,6 +1117,66 @@ def apply_task_version(task_id, selected_version):
         update_rkeeper_ini_basepath(ini_path_from_version, midbase_folder_name)
 
     on_check()
+
+import keyboard
+
+# ======================= Поддержка копирования при русской раскладке =======================
+
+def get_focused_widget():
+    """Получает текущий сфокусированный виджет"""
+    try:
+        return root.focus_get()
+    except:
+        return None
+
+def copy_text_global():
+    """Копирование текста при Ctrl+C (работает при любой раскладке)"""
+    try:
+        widget = get_focused_widget()
+        if widget and hasattr(widget, 'selection_get'):
+            text = widget.selection_get()
+            root.clipboard_clear()
+            root.clipboard_append(text)
+    except:
+        pass
+
+def paste_text_global():
+    """Вставка текста при Ctrl+V (работает при любой раскладке)"""
+    try:
+        widget = get_focused_widget()
+        if widget and hasattr(widget, 'delete') and hasattr(widget, 'insert'):
+            text = root.clipboard_get()
+            widget.delete(0, tk.END)
+            widget.insert(0, text)
+    except:
+        pass
+
+def cut_text_global():
+    """Вырезание текста при Ctrl+X (работает при любой раскладке)"""
+    try:
+        widget = get_focused_widget()
+        if widget and hasattr(widget, 'selection_get') and hasattr(widget, 'delete'):
+            text = widget.selection_get()
+            root.clipboard_clear()
+            root.clipboard_append(text)
+            widget.delete(0, tk.END)
+    except:
+        pass
+
+def setup_global_hotkeys():
+    """Регистрирует глобальные горячие клавиши"""
+    keyboard.add_hotkey('ctrl+c', copy_text_global)
+    keyboard.add_hotkey('ctrl+v', paste_text_global)
+    keyboard.add_hotkey('ctrl+x', cut_text_global)
+
+def on_closing():
+    """Очищает горячие клавиши перед закрытием"""
+    try:
+        keyboard.remove_all_hotkeys()
+    except:
+        pass
+    root.destroy()
+# ======================= КОНЕЦ ПОДДЕРЖКИ КОПИРОВАНИЯ =======================
 
 # Фрейм для метки, кнопки "Открыть" и поля для номера задачи
 label_and_open_frame = tk.Frame(settings_tab)
@@ -2479,6 +2540,10 @@ root.after(1000, update_every_1_seconds)
 # Проверка автообновления при старте
 if auto_update_var.get():
     root.after(1000, lambda: check_for_updates(silent=True))
+
+# === Инициализация глобальных горячих клавиш ===
+root.protocol("WM_DELETE_WINDOW", on_closing)
+setup_global_hotkeys()
 
 on_check()
 root.deiconify()
