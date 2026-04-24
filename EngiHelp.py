@@ -24,9 +24,11 @@ import tempfile
 import ctypes
 import webbrowser
 import keyboard
+import queue #Улучшенная проверка refsrv.exe
+
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.2.5"
+SCRIPT_VERSION = "v1.3.9"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -244,6 +246,7 @@ def save_settings_and_path(new_path):
     # Обновляем выпадающий список в интерфейсе
     if 'path_entry' in globals():
         path_entry['values'] = data["settings"]["recent_paths"]
+
 
 def find_latest_task_for_path(target_path):
     """Находит самый последний сохраненный ID задачи для указанного пути."""
@@ -556,13 +559,335 @@ def on_check():
         usesql_var.set(int(get_usesql_value()))
         return True
 
-def toggle_usedbsync():
-    value = "1" if usedbsync_var.get() else "0"
-    run_update(value)
+# ============================================================
+# ГЛОБАЛЬНОЕ СОСТОЯНИЕ (с оптимизацией)
+# ============================================================
+_refsrv_state = {
+    'cancel_event': threading.Event(),
+    'lock': threading.Lock(),
+    'result_queue': queue.Queue(),
+    'asked_paths': set(),
+    'poll_id': None,
+    'active_thread': None,
+}
+
+
+# ============================================================
+# ОПТИМИЗИРОВАННЫЙ ВОРКЕР - поиск через tasklist
+# ============================================================
+def _check_refsrv_worker(selected_path: str, cancel: threading.Event) -> None:
+    """Ищет refsrv.exe в фоновом потоке (оптимизированный способ)."""
+    
+    sel_norm = os.path.normpath(selected_path).lower()
+    
+    try:
+        # ✅ СПОСОБ 1: Быстрый поиск через tasklist
+        try:
+            result = subprocess.run(
+                ['tasklist', '/FI', 'IMAGENAME eq refsrv.exe', '/FO', 'CSV'],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            
+            if cancel.is_set():
+                _refsrv_state['result_queue'].put(("cancelled", sel_norm))
+                return
+            
+            if result.returncode == 0 and 'refsrv.exe' in result.stdout:
+                lines = result.stdout.strip().split('\n')
+                
+                # Парсим CSV: "refsrv.exe","PID"
+                if len(lines) > 1:
+                    try:
+                        parts = lines[1].split(',')
+                        pid_str = parts[1].strip('"')
+                        pid = int(pid_str)
+                        
+                        # Получаем полный путь
+                        try:
+                            proc = psutil.Process(pid)
+                            exe_path = proc.exe()
+                            exe_dir_norm = os.path.normpath(os.path.dirname(exe_path)).lower()
+                            
+                            if exe_dir_norm == sel_norm:
+                                _refsrv_state['result_queue'].put(("found", sel_norm, pid))
+                                return
+                        except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+                            pass
+                    except (ValueError, IndexError):
+                        pass
+            
+            _refsrv_state['result_queue'].put(("not_found", sel_norm))
+            return
+            
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            # Если tasklist не работает, падаем на psutil
+            logging.debug("tasklist не доступен, используем psutil")
+            pass
+
+        _refsrv_state['result_queue'].put(("not_found", sel_norm))
+        
+    except Exception:
+        logging.exception("Ошибка в _check_refsrv_worker")
+        _refsrv_state['result_queue'].put(("error", selected_path))
+
+
+# ============================================================
+# 2. ОПРОС ОЧЕРЕДИ из главного потока
+# ============================================================
+def _poll_refsrv_queue() -> None:
+    """Читает результаты из очереди в главном потоке."""
+    try:
+        while True:
+            msg = _refsrv_state['result_queue'].get_nowait()
+            _handle_refsrv_result(msg)
+    except queue.Empty:
+        pass
+
+    # Проверяем, жив ли поток
+    with _refsrv_state['lock']:
+        thread_alive = (
+            _refsrv_state['active_thread'] is not None
+            and _refsrv_state['active_thread'].is_alive()
+        )
+
+    if thread_alive or not _refsrv_state['result_queue'].empty():
+        _refsrv_state['poll_id'] = root.after(100, _poll_refsrv_queue)
+    else:
+        _refsrv_state['poll_id'] = None
+
+
+# ============================================================
+# 3. ОБРАБОТКА РЕЗУЛЬТАТА
+# ============================================================
+def _handle_refsrv_result(msg: tuple) -> None:
+    """Разбирает сообщение из очереди."""
+    status = msg[0]
+
+    if status == "cancelled":
+        logging.debug("refsrv check cancelled for: %s", msg[1])
+        return
+
+    if status == "not_found":
+        logging.debug("refsrv not found in: %s", msg[1])
+        return
+
+    if status == "error":
+        logging.warning("refsrv check error for path: %s", msg[1])
+        return
+
+    if status == "found":
+        sel_norm = msg[1]
+        pid = msg[2]
+
+        if sel_norm in _refsrv_state['asked_paths']:
+            return
+
+        _refsrv_state['asked_paths'].add(sel_norm)
+        _ask_restart_refsrv(pid, sel_norm)
+
+
+def _ask_restart_refsrv(pid: int, exe_dir_norm: str) -> None:
+    """Показывает диалог с предложением перезапуска."""
+    answer = messagebox.askyesno(
+        "Перезапуск refsrv.exe",
+        "Процесс refsrv.exe запущен из каталога, который вы только что выбрали.\n"
+        "Для того чтобы изменения UseSQL вступили в силу, необходимо перезапустить процесс.\n\n"
+        "Перезапустить сейчас?"
+    )
+    if answer:
+        _restart_refsrv_by_pid(pid, exe_dir_norm)
+
+
+# ============================================================
+# 4. ПЕРЕЗАПУСК ПРОЦЕССА
+# ============================================================
+def _restart_refsrv_by_pid(pid: int, exe_dir_norm: str) -> None:
+    """Завершает и перезапускает refsrv.exe."""
+    exe_path = os.path.join(exe_dir_norm, "refsrv.exe")
+
+    try:
+        proc = psutil.Process(pid)
+        try:
+            exe_path = proc.exe()
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            pass
+
+        try:
+            proc.terminate()
+            threading.Thread(
+                target=_wait_and_start_refsrv,
+                args=(proc, exe_path),
+                daemon=True,
+                name="refsrv-restart"
+            ).start()
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            _launch_refsrv(exe_path)
+
+    except psutil.NoSuchProcess:
+        _launch_refsrv(exe_path)
+    except Exception as e:
+        logging.error("Ошибка при перезапуске refsrv.exe (pid=%s): %s", pid, e)
+        messagebox.showerror("Ошибка", f"Не удалось перезапустить refsrv.exe:\n{e}")
+
+
+def _wait_and_start_refsrv(proc: psutil.Process, exe_path: str) -> None:
+    """Ждёт завершения процесса и запускает его снова."""
+    try:
+        proc.wait(timeout=5)
+    except (psutil.TimeoutExpired, psutil.AccessDenied, psutil.NoSuchProcess):
+        time.sleep(2)
+    except Exception as e:
+        logging.error("Ошибка при ожидании процесса: %s", e)
+        time.sleep(2)
+
+    _launch_refsrv(exe_path)
+
+
+def _launch_refsrv(exe_path: str) -> None:
+    """Запускает refsrv.exe с параметром -desktop."""
+    try:
+        subprocess.Popen(
+            f'start "" "{exe_path}" -desktop',
+            shell=True
+        )
+        logging.info("refsrv.exe запущен: %s", exe_path)
+    except Exception as e:
+        logging.error("Не удалось запустить refsrv.exe: %s", e)
+
+
+# ============================================================
+# 5. УПРАВЛЕНИЕ ПРОВЕРКОЙ
+# ============================================================
+def _stop_refsrv_check() -> None:
+    """Останавливает текущую проверку refsrv."""
+    with _refsrv_state['lock']:
+        _refsrv_state['cancel_event'].set()
+        if _refsrv_state['active_thread'] and _refsrv_state['active_thread'].is_alive():
+            _refsrv_state['active_thread'].join(timeout=0.5)
+
+
+def check_refsrv_and_ask_restart(selected_path: str) -> None:
+    """Запускает фоновую проверку refsrv.exe."""
+    sel_norm = os.path.normpath(selected_path).lower()
+
+    with _refsrv_state['lock']:
+        # Отменяем предыдущую проверку
+        _refsrv_state['cancel_event'].set()
+
+        old_thread = _refsrv_state['active_thread']
+        if old_thread and old_thread.is_alive():
+            old_thread.join(timeout=0.5)
+
+        # Сбрасываем флаг и очищаем очередь
+        _refsrv_state['cancel_event'].clear()
+        while not _refsrv_state['result_queue'].empty():
+            try:
+                _refsrv_state['result_queue'].get_nowait()
+            except queue.Empty:
+                break
+
+        # Запускаем новый поток
+        t = threading.Thread(
+            target=_check_refsrv_worker,
+            args=(selected_path, _refsrv_state['cancel_event']),
+            daemon=True,
+            name=f"refsrv-check-{sel_norm}"
+        )
+        _refsrv_state['active_thread'] = t
+        t.start()
+
+    # Запускаем опрос очереди
+    if _refsrv_state['poll_id'] is None:
+        _refsrv_state['poll_id'] = root.after(100, _poll_refsrv_queue)
+
+
+def _reset_refsrv_cache_for_path(selected_path: str) -> None:
+    """Сбрасывает кеш для пути."""
+    sel_norm = os.path.normpath(selected_path).lower()
+    _refsrv_state['asked_paths'].discard(sel_norm)
+
+
+def _check_refsrv_on_disable(selected_path: str) -> None:
+    """Проверяет refsrv при снятии флага UseSQL."""
+    sel_norm = os.path.normpath(selected_path).lower()
+    
+    try:
+        # Быстрый поиск через tasklist
+        try:
+            result = subprocess.run(
+                ['tasklist', '/FI', 'IMAGENAME eq refsrv.exe', '/FO', 'CSV'],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            
+            if result.returncode == 0 and 'refsrv.exe' in result.stdout:
+                lines = result.stdout.strip().split('\n')
+                if len(lines) > 1:
+                    try:
+                        parts = lines[1].split(',')
+                        pid_str = parts[1].strip('"')
+                        pid = int(pid_str)
+                        
+                        proc = psutil.Process(pid)
+                        exe_dir_norm = os.path.normpath(os.path.dirname(proc.exe())).lower()
+                        
+                        if exe_dir_norm == sel_norm:
+                            answer = messagebox.askyesno(
+                                "Перезапуск refsrv.exe",
+                                "Процесс refsrv.exe всё ещё запущен.\n"
+                                "Перезапустить его для применения изменений?"
+                            )
+                            if answer:
+                                _restart_refsrv_by_pid(pid, exe_dir_norm)
+                            return
+                    except (ValueError, IndexError, psutil.NoSuchProcess):
+                        pass
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        
+        # Резервный поиск через psutil
+        for proc in psutil.process_iter(['pid', 'name']):
+            if proc.info.get('name', '').lower() != 'refsrv.exe':
+                continue
+            
+            try:
+                exe_dir_norm = os.path.normpath(os.path.dirname(proc.exe())).lower()
+                if exe_dir_norm == sel_norm:
+                    answer = messagebox.askyesno(
+                        "Перезапуск refsrv.exe",
+                        "Процесс refsrv.exe всё ещё запущен.\n"
+                        "Перезапустить его для применения изменений?"
+                    )
+                    if answer:
+                        _restart_refsrv_by_pid(proc.pid, exe_dir_norm)
+                    return
+            except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+                continue
+                
+    except Exception as e:
+        logging.error("Ошибка при проверке refsrv при снятии флага: %s", e)
 
 def toggle_usesql():
+    """Обработчик чек-бокса UseSQL."""
     value = "1" if usesql_var.get() else "0"
     run_update_usesql_value(value)
+
+    if value == "1":
+        # Галочка поставлена — проверяем refsrv.exe
+        check_refsrv_and_ask_restart(ini_path)
+    else:
+        # Галочка снята — сбрасываем кеш и отменяем проверку
+        _check_refsrv_on_disable(ini_path)
+        _reset_refsrv_cache_for_path(ini_path)
+        _stop_refsrv_check()
+        
+def toggle_usedbsync():
+    """Обработчик чек-бокса UseDBSync."""
+    value = "1" if usedbsync_var.get() else "0"
+    run_update(value)
 
 def run_update(value):
     failed = []
@@ -854,7 +1179,7 @@ def change_rk_version():
 
 
 def perform_version_change(task_id, current_version, target_version):
-    """Выполняет перенос базы задачи в другую версию RK."""
+    """Выполняет перенос базы задачи в другую версию RK с заменой только rk7.udb."""
     data = load_data()
     tasks = data.get("tasks", {})
     task_info = tasks.get(task_id)
@@ -877,54 +1202,60 @@ def perform_version_change(task_id, current_version, target_version):
     kill_processes_for_version_change()
 
     # Пути к base
-        # Получаем путь к base текущей задачи
     current_base_path = task_info.get("base_path")
     if not current_base_path or not os.path.isdir(current_base_path):
-        messagebox.showerror("Ошибка",
-            f"Папка base для задачи не найдена:\n{current_base_path}")
+        messagebox.showerror("Ошибка", f"Папка base для задачи не найдена:\n{current_base_path}")
         return
+    
     base_folder_name = os.path.basename(current_base_path)
     target_base_path = os.path.join(target_product_root, base_folder_name).replace("\\", "/")
+    target_base_template = os.path.join(target_product_root, "base") # Шаблонная папка base в новой версии
 
-        # Копируем папку base в целевую версию
+    # Список файлов-шаблонов (измените имена, если нужно)
+    template_files = ["drvlocalize", "workmods", "dealerpresets.udb", "upgradedevices.abs", "upgradepresets.abs"]
+
     try:
+        # Создаем новую папку base для задачи
         if os.path.exists(target_base_path):
-            if not messagebox.askyesno("Предупреждение",
-                f"Папка уже существует:\n{target_base_path}\n\nПерезаписать?"):
+            if not messagebox.askyesno("Предупреждение", f"Папка уже существует:\n{target_base_path}\n\nПерезаписать?"):
                 return
             shutil.rmtree(target_base_path)
+        os.makedirs(target_base_path)
 
-        shutil.copytree(current_base_path, target_base_path)
-        print(f"Base скопирована: {current_base_path} -> {target_base_path}")
+        # 1. Копируем файлы-шаблоны из папки base целевой версии
+        if os.path.exists(target_base_template):
+            for item in template_files:
+                src_item = os.path.join(target_base_template, item)
+                dst_item = os.path.join(target_base_path, item)
+                if os.path.exists(src_item):
+                    if os.path.isdir(src_item):
+                        shutil.copytree(src_item, dst_item)
+                    else:
+                        shutil.copy2(src_item, dst_item)
+        
+        # 2. Копируем только rk7.udb из старой базы
+        src_udb = os.path.join(current_base_path, "rk7.udb")
+        dst_udb = os.path.join(target_base_path, "rk7.udb")
+        if os.path.exists(src_udb):
+            shutil.copy2(src_udb, dst_udb)
+        else:
+            messagebox.showwarning("Внимание", "Файл rk7.udb не найден в исходной базе!")
+
+        print(f"Base перенесена: {target_base_path}")
     except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось скопировать base:\n{e}")
+        messagebox.showerror("Ошибка", f"Не удалось перенести базу:\n{e}")
         return
 
-    # MIDBASE
+    # MIDBASE (создаем пустую, как и было)
     current_midbase = task_info.get("midbase_path")
     target_midbase_path = None
-    
     if current_midbase:
-        # Определяем путь, где должна быть новая midbase
         target_midbase_path = os.path.join(target_product_root, os.path.basename(current_midbase)).replace("\\", "/")
-        
-        # Удаляем старую, если есть
-        if os.path.exists(target_midbase_path):
-            shutil.rmtree(target_midbase_path)
-            
-        # Создаем пустую директорию вместо копирования
-        try:
-            os.makedirs(target_midbase_path)
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось создать пустую папку midbase: {e}")
-            return
-
+        if os.path.exists(target_midbase_path): shutil.rmtree(target_midbase_path)
+        os.makedirs(target_midbase_path)
 
     # === ОБНОВЛЕНИЕ JSON СТРУКТУРЫ ===
-    if "versions" not in task_info:
-        task_info["versions"] = {}
-
-    # Сохраняем текущую версию в словарь версий, если её там нет
+    if "versions" not in task_info: task_info["versions"] = {}
     if current_version not in task_info["versions"]:
         task_info["versions"][current_version] = {
             "ini_path": current_ini_path,
@@ -933,22 +1264,17 @@ def perform_version_change(task_id, current_version, target_version):
             "ini_settings": task_info.get("ini_settings", {})
         }
 
-    # Создаем запись для новой версии
     new_version_data = {
         "ini_path": target_ini_path_normalized,
         "base_path": target_base_path,
         "ini_settings": task_info.get("ini_settings", {}).copy()
     }
-    if target_midbase_path:
-        new_version_data["midbase_path"] = target_midbase_path
+    if target_midbase_path: new_version_data["midbase_path"] = target_midbase_path
 
     task_info["versions"][target_version] = new_version_data
-    
-    # Обновляем основные параметры задачи на новую версию
     task_info["ini_path"] = target_ini_path_normalized
     task_info["base_path"] = target_base_path
-    if target_midbase_path:
-        task_info["midbase_path"] = target_midbase_path
+    if target_midbase_path: task_info["midbase_path"] = target_midbase_path
 
     tasks[task_id] = task_info
     data["tasks"] = tasks
@@ -962,7 +1288,6 @@ def perform_version_change(task_id, current_version, target_version):
 
     update_rk7srv_ini(os.path.join(target_bin_win, "rk7srv.INI"), base_folder_name)
     
-    # Обновляем UI
     path_var.set(target_ini_path_normalized)
     apply_path(update_task=False)
     messagebox.showinfo("Успех", f"База перенесена в версию {target_version}")
@@ -1231,13 +1556,14 @@ def save_task_id_to_file():
     if not product_root:
         messagebox.showerror("Ошибка", "Не удалось определить корневую папку продукта.")
         return
-
+"""
     task_id_file = os.path.join(product_root, "ID задачи.txt")
     try:
         with open(task_id_file, "w", encoding="utf-8") as f:
             f.write(task_id)
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось сохранить номер задачи:\n{e}")
+"""
 
 # Функция по сбору параметров
 def get_ini_settings(ini_path):
