@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.4.0"
+SCRIPT_VERSION = "v1.4.1"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -869,6 +869,109 @@ def _check_refsrv_on_disable(selected_path: str) -> None:
                 
     except Exception as e:
         logging.error("Ошибка при проверке refsrv при снятии флага: %s", e)
+
+#======================Начало / Запуск рефа с параметром UpgradeAnyTime======================
+def set_upgrade_anytime(value: str) -> bool:
+    """Устанавливает UpgradeAnyTime=value в секцию [REFSERVER] файла rk7srv.INI.
+    Алгоритм:
+      1. Если строка UpgradeAnyTime уже есть в [REFSERVER] — обновляет её.
+      2. Если секция [REFSERVER] есть, но параметра нет — вставляет строку
+         последней в секции (перед следующей секцией или в конце файла).
+      3. Если секции [REFSERVER] нет — добавляет секцию и параметр в конец файла.
+    """
+    ini_file = os.path.join(ini_path, "rk7srv.INI")
+    if not os.path.isfile(ini_file):
+        messagebox.showerror("Ошибка", f"Файл rk7srv.INI не найден:\n{ini_file}")
+        return False
+    try:
+        try:
+            with open(ini_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            with open(ini_file, 'r', encoding='cp1251') as f:
+                lines = f.readlines()
+
+        # --- Проход 1: ищем позиции секции и параметра ---
+        refserver_start = None   # индекс строки [REFSERVER]
+        param_line_idx  = None   # индекс строки UpgradeAnyTime=... внутри секции
+        next_section_idx = None  # индекс первой секции ПОСЛЕ [REFSERVER]
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if re.match(r'^\[REFSERVER\]', stripped, re.IGNORECASE):
+                refserver_start = i
+            elif re.match(r'^\[', stripped) and not stripped.startswith(';;'):
+                if refserver_start is not None and next_section_idx is None:
+                    next_section_idx = i
+            if refserver_start is not None and next_section_idx is None:
+                if re.match(r'^\s*UpgradeAnyTime\s*=', stripped, re.IGNORECASE):
+                    param_line_idx = i
+
+        # --- Проход 2: формируем новый список строк ---
+        new_lines = list(lines)
+
+        if refserver_start is None:
+            # Секции [REFSERVER] нет — добавляем в конец
+            if new_lines and not new_lines[-1].endswith('\n'):
+                new_lines.append('\n')
+            new_lines.append("\n[REFSERVER]\n")
+            new_lines.append(f"UpgradeAnyTime={value}\n")
+
+        elif param_line_idx is not None:
+            # Параметр уже есть — просто заменяем строку
+            new_lines[param_line_idx] = f"UpgradeAnyTime={value}\n"
+
+        else:
+            # Секция есть, параметра нет — вставляем перед следующей секцией,
+            # но ПОСЛЕ всех пустых строк, которые идут в конце [REFSERVER]
+            if next_section_idx is not None:
+                insert_at = next_section_idx
+                # Двигаемся назад, пока строки пустые — вставляем перед ними
+                while insert_at > 0 and new_lines[insert_at - 1].strip() == "":
+                    insert_at -= 1
+            else:
+                insert_at = len(new_lines)
+            new_lines.insert(insert_at, f"UpgradeAnyTime={value}\n")
+
+        with open(ini_file, 'w', encoding='cp1251') as f:
+            f.writelines(new_lines)
+        return True
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось обновить rk7srv.INI:\n{e}")
+        return False
+
+
+def upgrade_anytime_refsrv():
+    """Устанавливает UpgradeAnyTime=1, запускает refsrv.exe, затем сбрасывает в 0."""
+    refsrv_exe = os.path.join(ini_path, "refsrv.exe")
+    if not os.path.isfile(refsrv_exe):
+        messagebox.showerror("Ошибка", f"Файл refsrv.exe не найден:\n{refsrv_exe}")
+        return
+
+    # Шаг 1: UpgradeAnyTime=1
+    if not set_upgrade_anytime("1"):
+        return
+
+    # Шаг 2: Запуск refsrv.exe
+    try:
+        subprocess.Popen(
+            f'start "" "{refsrv_exe}" -desktop',
+            shell=True
+        )
+        logging.info("refsrv.exe запущен (UpgradeAnyTime)")
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось запустить refsrv.exe:\n{e}")
+        set_upgrade_anytime("0")  # Сбрасываем даже при ошибке запуска
+        return
+
+    # Шаг 3: Ждём немного (чтобы процесс успел стартовать) и сбрасываем в 0
+    def reset_flag():
+        time.sleep(3)
+        set_upgrade_anytime("0")
+        logging.info("UpgradeAnyTime сброшен в 0")
+
+    threading.Thread(target=reset_flag, daemon=True, name="upgrade-anytime-reset").start()
+#======================Конец / Запуск рефа с параметром UpgradeAnyTime======================
 
 def toggle_usesql():
     """Обработчик чек-бокса UseSQL."""
@@ -2566,7 +2669,14 @@ usedbsync_cb = tk.Checkbutton(
 )
 usedbsync_cb.grid(row=0, column=1, sticky="w", padx=(0, 10))
 
-# 3-й столбец можно оставить пустым
+upgrade_anytime_btn = tk.Button(
+    flags_frame,
+    text="UpgradeAnyTime",
+    command=upgrade_anytime_refsrv,
+    anchor="w"
+)
+upgrade_anytime_btn.grid(row=0, column=2, sticky="w", padx=(80, 0))
+
 flags_frame.grid_columnconfigure(0, weight=1)
 flags_frame.grid_columnconfigure(1, weight=1)
 flags_frame.grid_columnconfigure(2, weight=1)
