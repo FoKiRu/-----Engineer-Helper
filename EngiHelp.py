@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.4.1"
+SCRIPT_VERSION = "v1.4.2"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -279,9 +279,12 @@ def extract_task_id_from_rk7srv_ini(ini_path):
         with open(ini_path, 'r', encoding='cp1251') as file:
             for line in file:
                 line = line.strip()
-                # Ищем base_ что угодно (буквы или цифры) до конца пути или символа
                 if line.lower().startswith("udbfile") or line.lower().startswith("workmodules"):
-                    # [a-zA-Z0-9_]+ захватывает и цифры, и буквы, и подчеркивания
+                    # Новый формат: ..\..\{task_id}\base\...
+                    match = re.search(r'([a-zA-Z0-9_]+)[/\\]base[/\\]', line)
+                    if match:
+                        return match.group(1)
+                    # Старый формат (обратная совместимость): base_{task_id}
                     match = re.search(r'base_([a-zA-Z0-9_]+)', line)
                     if match:
                         return match.group(1)
@@ -1105,13 +1108,19 @@ def on_task_selected(event):
     # Применяем base_path
     base_path = task_info.get("base_path", "")
     if base_path:
-        base_dir = os.path.basename(base_path)
+        # Новый формат: .../197034/base  -> передаём "197034\\base"
+        # Старый формат: .../base_197034 -> передаём "base_197034" (обратная совместимость)
+        base_name = os.path.basename(base_path)
+        base_parent = os.path.basename(os.path.dirname(base_path))
+        base_dir = os.path.join(base_parent, base_name) if base_name == "base" else base_name
         update_rk7srv_ini(rk7srv_ini_path, base_dir)
 
     # === ПРИМЕНЯЕМ midbase_path ===
     midbase_path = task_info.get("midbase_path", "")
     if midbase_path:
-        midbase_folder_name = os.path.basename(midbase_path)
+        mid_name = os.path.basename(midbase_path)
+        mid_parent = os.path.basename(os.path.dirname(midbase_path))
+        midbase_folder_name = os.path.join(mid_parent, mid_name) if mid_name == "MIDBASE" else mid_name
         update_rkeeper_ini_basepath(ini_path_from_task, midbase_folder_name)
         print(f"[OK] Применён MIDBASE: {midbase_folder_name}")
 
@@ -1121,6 +1130,7 @@ def on_task_selected(event):
     print(f"Параметры для задачи {selected_task_id} применены!")
 
 # Функция по обновлению rk7srv.INI для директории по задачи
+# base_dir теперь ожидается в формате "{task_id}\\base"
 def update_rk7srv_ini(ini_path, base_dir):
     try:
         # Читаем файл в кодировке cp1251
@@ -1311,9 +1321,19 @@ def perform_version_change(task_id, current_version, target_version):
         messagebox.showerror("Ошибка", f"Папка base для задачи не найдена:\n{current_base_path}")
         return
     
-    base_folder_name = os.path.basename(current_base_path)
-    target_base_path = os.path.join(target_product_root, base_folder_name).replace("\\", "/")
-    target_base_template = os.path.join(target_product_root, "base") # Шаблонная папка base в новой версии
+    # Новый формат: .../197034/base
+    base_name = os.path.basename(current_base_path)  # "base" или "base_197034"
+    base_parent = os.path.basename(os.path.dirname(current_base_path))  # task_id или product_root
+    if base_name == "base":
+        # Новый формат: создаём {task_id}/base в целевом продукте
+        target_task_folder = os.path.join(target_product_root, base_parent)
+        target_base_path = os.path.join(target_task_folder, "base").replace("\\", "/")
+        base_folder_name = os.path.join(base_parent, "base")  # для INI
+    else:
+        # Старый формат: base_197034
+        target_base_path = os.path.join(target_product_root, base_name).replace("\\", "/")
+        base_folder_name = base_name
+    target_base_template = os.path.join(target_product_root, "base")  # Шаблонная папка base в новой версии
 
     # Список файлов-шаблонов (измените имена, если нужно)
     template_files = ["drvlocalize", "workmods", "dealerpresets.udb", "upgradedevices.abs", "upgradepresets.abs"]
@@ -1354,9 +1374,17 @@ def perform_version_change(task_id, current_version, target_version):
     current_midbase = task_info.get("midbase_path")
     target_midbase_path = None
     if current_midbase:
-        target_midbase_path = os.path.join(target_product_root, os.path.basename(current_midbase)).replace("\\", "/")
+        mid_name = os.path.basename(current_midbase)  # "MIDBASE" или "MIDBASE_197034"
+        mid_parent = os.path.basename(os.path.dirname(current_midbase))
+        if mid_name == "MIDBASE":
+            # Новый формат: {task_id}/MIDBASE
+            target_task_folder = os.path.join(target_product_root, mid_parent)
+            target_midbase_path = os.path.join(target_task_folder, "MIDBASE").replace("\\", "/")
+        else:
+            # Старый формат: MIDBASE_197034
+            target_midbase_path = os.path.join(target_product_root, mid_name).replace("\\", "/")
         if os.path.exists(target_midbase_path): shutil.rmtree(target_midbase_path)
-        os.makedirs(target_midbase_path)
+        os.makedirs(target_midbase_path, exist_ok=True)
 
     # === ОБНОВЛЕНИЕ JSON СТРУКТУРЫ ===
     if "versions" not in task_info: task_info["versions"] = {}
@@ -1536,13 +1564,17 @@ def apply_task_version(task_id, selected_version):
 
     base_path = version_info.get("base_path", "")
     if base_path and os.path.exists(rk7srv_ini_path):
-        base_dir = os.path.basename(base_path)
+        base_name = os.path.basename(base_path)
+        base_parent = os.path.basename(os.path.dirname(base_path))
+        base_dir = os.path.join(base_parent, base_name) if base_name == "base" else base_name
         update_rk7srv_ini(rk7srv_ini_path, base_dir)
 
     # === MIDBASE ===
     midbase_path = version_info.get("midbase_path", "")
     if midbase_path:
-        midbase_folder_name = os.path.basename(midbase_path)
+        mid_name = os.path.basename(midbase_path)
+        mid_parent = os.path.basename(os.path.dirname(midbase_path))
+        midbase_folder_name = os.path.join(mid_parent, mid_name) if mid_name == "MIDBASE" else mid_name
         update_rkeeper_ini_basepath(ini_path_from_version, midbase_folder_name)
 
     on_check()
@@ -1756,8 +1788,9 @@ def save_task_id():
                 messagebox.showerror("Ошибка", f"Не удалось проверить блокировку:\n{e}")
                 return
 
-    # === Папка base_(task_id) ===
-    new_base_path = os.path.join(product_root, f"base_{task_id}")
+    # === Папка {task_id}/base ===
+    task_folder = os.path.join(product_root, task_id)
+    new_base_path = os.path.join(task_folder, "base")
     if os.path.exists(new_base_path):
         if messagebox.askyesno("Предупреждение", f"Папка {new_base_path} уже существует. Перезаписать?"):
             try:
@@ -1774,9 +1807,10 @@ def save_task_id():
         messagebox.showerror("Ошибка", f"Не удалось скопировать папку base:\n{e}")
         return
 
-    # === Папка MIDBASE_(task_id) - ВСЕГДА СОЗДАЁТСЯ ПУСТОЙ ===
-    midbase_folder_name = f"MIDBASE_{task_id}"
-    midbase_path = os.path.join(product_root, midbase_folder_name)
+    # === Папка {task_id}/MIDBASE - ВСЕГДА СОЗДАЁТСЯ ПУСТОЙ ===
+    midbase_path = os.path.join(task_folder, "MIDBASE")
+    # Путь для записи в INI: {task_id}\MIDBASE
+    midbase_ini_name = os.path.join(task_id, "MIDBASE")
 
     if os.path.exists(midbase_path):
         if not messagebox.askyesno(
@@ -1799,8 +1833,8 @@ def save_task_id():
         messagebox.showerror("Ошибка", f"Не удалось создать папку MIDBASE:\n{e}")
         return
 
-    # Обновляем BasePath в RKEEPER.INI
-    update_rkeeper_ini_basepath(path_var.get(), midbase_folder_name)
+    # Обновляем BasePath в RKEEPER.INI (передаём {task_id}\MIDBASE)
+    update_rkeeper_ini_basepath(path_var.get(), midbase_ini_name)
 
     # Собираем параметры INI
     ini_settings = get_ini_settings(path_var.get())
@@ -1826,8 +1860,8 @@ def save_task_id():
     task_id_combobox['values'] = load_task_ids()
     task_id_combobox.current(1)  # Всегда показывать пустую строку первой при открытии
 
-    # Обновляем rk7srv.INI
-    base_dir = os.path.basename(new_base_path)
+    # Обновляем rk7srv.INI: передаём путь {task_id}\base
+    base_dir = os.path.join(task_id, "base")
     rk7srv_ini_path = os.path.join(path_var.get(), "rk7srv.INI")
     update_rk7srv_ini(rk7srv_ini_path, base_dir)
 
@@ -1859,27 +1893,37 @@ def delete_task():
 
     # === Собираем ВСЕ пути base и midbase (основной + из всех версий) ===
     all_paths = set()
+    task_folders = set()  # Папки {task_id}, которые нужно удалить если они окажутся пустыми
+
+    def _collect_path(p):
+        """  Добавляет путь в all_paths и, если это новый формат (base/MIDBASE внутри {task_id}),
+             запоминает родительскую папку для последующей проверки. """
+        if not p:
+            return
+        norm = os.path.normpath(p)
+        all_paths.add(norm)
+        leaf = os.path.basename(norm)
+        if leaf in ("base", "MIDBASE"):
+            task_folders.add(os.path.dirname(norm))
 
     # Основной base_path
-    main_base = task_info.get("base_path")
-    if main_base:
-        all_paths.add(os.path.normpath(main_base))
+    _collect_path(task_info.get("base_path"))
 
     # Основной midbase_path
-    main_midbase = task_info.get("midbase_path")
-    if main_midbase:
-        all_paths.add(os.path.normpath(main_midbase))
+    _collect_path(task_info.get("midbase_path"))
 
     # base_path и midbase_path из каждой версии
     versions = task_info.get("versions", {})
     for ver_name, ver_info in versions.items():
-        ver_base = ver_info.get("base_path")
-        if ver_base:
-            all_paths.add(os.path.normpath(ver_base))
-        
-        ver_midbase = ver_info.get("midbase_path")
-        if ver_midbase:
-            all_paths.add(os.path.normpath(ver_midbase))
+        _collect_path(ver_info.get("base_path"))
+        _collect_path(ver_info.get("midbase_path"))
+
+    # Добавляем родительские папки {task_id}, которые содержат только base/MIDBASE
+    for tf in task_folders:
+        if os.path.isdir(tf):
+            children = set(os.listdir(tf))
+            if children <= {"base", "MIDBASE"}:  # папка содержит только эти подпапки
+                all_paths.add(tf)
 
     # === Формируем сообщение для подтверждения ===
     existing_paths = [p for p in all_paths if os.path.exists(p)]
