@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.4.2"
+SCRIPT_VERSION = "v1.4.3"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -2226,7 +2226,14 @@ def delete_midbase_files():
     # Если в JSON нет - строим путь автоматически
     if not midbase_path:
         parent_path = os.path.dirname(base_path)
-        midbase_path = os.path.normpath(os.path.join(parent_path, f"MIDBASE_{selected_task_id}")).replace("\\", "/")
+        # Новый: {task_id}/MIDBASE - папка MIDBASE рядом с base
+        new_format_path = os.path.join(parent_path, "MIDBASE")
+        # Старый: MIDBASE_{selected_task_id} - на уровень выше
+        old_format_path = os.path.join(os.path.dirname(parent_path), f"MIDBASE_{selected_task_id}")
+        if os.path.isdir(new_format_path):
+             midbase_path = new_format_path
+        else:
+             midbase_path = old_format_path
 
     if not os.path.isdir(midbase_path):
         messagebox.showerror("Ошибка", f"Папка MIDBASE не найдена:\n{midbase_path}")
