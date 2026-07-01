@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.4.4"
+SCRIPT_VERSION = "v1.5.5"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -408,6 +408,180 @@ def get_usesql_value():
         pass
     return "0"
 
+def get_port_value():
+    """Читает PORT из секции [TCPSOC] файла rk7srv.INI."""
+    rk7srv_path = os.path.join(ini_path, "rk7srv.INI")
+    if not os.path.isfile(rk7srv_path):
+        return ""
+    try:
+        try:
+            with open(rk7srv_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            with open(rk7srv_path, 'r', encoding='cp1251') as f:
+                lines = f.readlines()
+        in_tcpsoc = False
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r'^\[TCPSOC\]', stripped, re.IGNORECASE):
+                in_tcpsoc = True
+                continue
+            if in_tcpsoc:
+                if stripped.startswith('['):
+                    break
+                m = re.match(r'^\s*PORT\s*=\s*(\d+)', stripped, re.IGNORECASE)
+                if m:
+                    return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+def get_refserver_name():
+    """Читает имя сервера из [REFSERVER] Server = ... в rk7srv.INI."""
+    rk7srv_path = os.path.join(ini_path, "rk7srv.INI")
+    if not os.path.isfile(rk7srv_path):
+        return ""
+    try:
+        try:
+            with open(rk7srv_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            with open(rk7srv_path, 'r', encoding='cp1251') as f:
+                lines = f.readlines()
+        in_refserver = False
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r'^\[REFSERVER\]', stripped, re.IGNORECASE):
+                in_refserver = True
+                continue
+            if in_refserver:
+                if stripped.startswith('['):
+                    break
+                m = re.match(r'^\s*Server\s*=\s*(\S+)', stripped, re.IGNORECASE)
+                if m:
+                    return m.group(1).strip()
+    except Exception:
+        pass
+    return ""
+
+def set_port_rk7srv(ini_path_val, port):
+    """Устанавливает PORT=port в секции [TCPSOC] файла rk7srv.INI."""
+    rk7srv_path = os.path.join(ini_path_val, "rk7srv.INI")
+    if not os.path.isfile(rk7srv_path):
+        return False
+    try:
+        try:
+            with open(rk7srv_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            enc = 'utf-8'
+        except UnicodeDecodeError:
+            with open(rk7srv_path, 'r', encoding='cp1251') as f:
+                lines = f.readlines()
+            enc = 'cp1251'
+
+        new_lines = []
+        in_tcpsoc = False
+        port_updated = False
+        tcpsoc_found = False
+
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r'^\[TCPSOC\]', stripped, re.IGNORECASE):
+                in_tcpsoc = True
+                tcpsoc_found = True
+                new_lines.append(line)
+                continue
+            if in_tcpsoc:
+                if stripped.startswith('['):
+                    # Выходим из секции — если PORT не нашли, добавляем перед новой секцией
+                    if not port_updated:
+                        new_lines.append(f"PORT={port}\n")
+                        port_updated = True
+                    in_tcpsoc = False
+                elif re.match(r'^\s*PORT\s*=', stripped, re.IGNORECASE):
+                    new_lines.append(f"PORT={port}\n")
+                    port_updated = True
+                    continue
+            new_lines.append(line)
+
+        if not tcpsoc_found:
+            new_lines.append(f"\n[TCPSOC]\nPORT={port}\n")
+        elif not port_updated:
+            new_lines.append(f"PORT={port}\n")
+
+        shutil.copy2(rk7srv_path, rk7srv_path + ".bak")
+        with open(rk7srv_path, 'w', encoding=enc) as f:
+            f.writelines(new_lines)
+        return True
+    except Exception as e:
+        print(f"[ERR] set_port_rk7srv: {e}")
+        return False
+
+def set_port_rk7man(ini_path_val, server_name, port):
+    """Устанавливает {server_name}=127.0.0.1:{port} в секции [TCPDNS] файла rk7man.ini."""
+    rk7man_path = os.path.join(ini_path_val, "rk7man.ini")
+    if not os.path.isfile(rk7man_path):
+        return False
+    try:
+        try:
+            with open(rk7man_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            enc = 'utf-8'
+        except UnicodeDecodeError:
+            with open(rk7man_path, 'r', encoding='cp1251') as f:
+                lines = f.readlines()
+            enc = 'cp1251'
+
+        new_lines = []
+        in_tcpdns = False
+        entry_updated = False
+        tcpdns_found = False
+
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r'^\[TCPDNS\]', stripped, re.IGNORECASE):
+                in_tcpdns = True
+                tcpdns_found = True
+                new_lines.append(line)
+                continue
+            if in_tcpdns:
+                if stripped.startswith('['):
+                    if not entry_updated:
+                        new_lines.append(f"{server_name}=127.0.0.1:{port}\n")
+                        entry_updated = True
+                    in_tcpdns = False
+                elif re.match(rf'^\s*{re.escape(server_name)}\s*=', stripped, re.IGNORECASE):
+                    new_lines.append(f"{server_name}=127.0.0.1:{port}\n")
+                    entry_updated = True
+                    continue
+            new_lines.append(line)
+
+        if not tcpdns_found:
+            new_lines.append(f"\n[TCPDNS]\n{server_name}=127.0.0.1:{port}\n")
+        elif not entry_updated:
+            new_lines.append(f"{server_name}=127.0.0.1:{port}\n")
+
+        shutil.copy2(rk7man_path, rk7man_path + ".bak")
+        with open(rk7man_path, 'w', encoding=enc) as f:
+            f.writelines(new_lines)
+        return True
+    except Exception as e:
+        print(f"[ERR] set_port_rk7man: {e}")
+        return False
+
+def apply_port(ini_path_val, port):
+    """Применяет порт в rk7srv.INI [TCPSOC] и rk7man.ini [TCPDNS]."""
+    if not port:
+        return
+    server_name = get_refserver_name()
+    ok1 = set_port_rk7srv(ini_path_val, port)
+    if server_name:
+        ok2 = set_port_rk7man(ini_path_val, server_name, port)
+    else:
+        ok2 = False
+        print("[WARN] apply_port: имя сервера из [REFSERVER] не найдено, rk7man.ini не обновлён")
+    print(f"[PORT] rk7srv={ok1}, rk7man={ok2}, server='{server_name}', port={port}")
+
 def update_ini_file(filepath, value, key):
     try:
         # Создаем бэкап только если файл существует
@@ -562,6 +736,7 @@ def on_check():
         clear_base_btn.config(state="normal")  # Включаем кнопку "Clear Base"
         usedbsync_var.set(int(detect_consensus_value()))
         usesql_var.set(int(get_usesql_value()))
+        port_var.set(get_port_value())
         return True
 
 # ============================================================
@@ -991,10 +1166,7 @@ def toggle_usesql():
         _check_refsrv_on_disable(ini_path)
         _reset_refsrv_cache_for_path(ini_path)
         _stop_refsrv_check()
-
-    # Если активен дефолтный режим (задача не выбрана) — сохраняем изменение в дефолты
-    sync_default_settings_if_no_task()
-
+        
 def toggle_usedbsync():
     """Обработчик чек-бокса UseDBSync."""
     value = "1" if usedbsync_var.get() else "0"
@@ -1114,6 +1286,11 @@ def on_task_selected(event):
         station_var.set(ini_settings["Station"])
         server_var.set(ini_settings["Server"])
         save_wincash_params()
+
+    # Применяем Port
+    if "Port" in ini_settings and ini_settings["Port"]:
+        apply_port(ini_path_from_task, str(ini_settings["Port"]))
+        port_var.set(str(ini_settings["Port"]))
 
     # Применяем base_path
     base_path = task_info.get("base_path", "")
@@ -1572,6 +1749,10 @@ def apply_task_version(task_id, selected_version):
         server_var.set(ini_settings["Server"])
         save_wincash_params()
 
+    if "Port" in ini_settings and ini_settings["Port"]:
+        apply_port(ini_path_from_version, str(ini_settings["Port"]))
+        port_var.set(str(ini_settings["Port"]))
+
     base_path = version_info.get("base_path", "")
     if base_path and os.path.exists(rk7srv_ini_path):
         base_name = os.path.basename(base_path)
@@ -1744,12 +1925,13 @@ def save_task_id_to_file():
 
 # Функция по сбору параметров
 def get_ini_settings(ini_path):
-    """Сбор параметров UseDBSync, UseSQL, Station, Server из INI-файлов."""
+    """Сбор параметров UseDBSync, UseSQL, Station, Server, Port из INI-файлов."""
     settings = {
         "UseDBSync": get_usedbsync_values(),
         "UseSQL": get_usesql_value(),
         "Station": station_var.get(),
-        "Server": server_var.get()
+        "Server": server_var.get(),
+        "Port": get_port_value(),
     }
     return settings
 
@@ -2309,14 +2491,14 @@ def delete_midbase_files():
     # Если в JSON нет - строим путь автоматически
     if not midbase_path:
         parent_path = os.path.dirname(base_path)
-        # Новый: {task_id}/MIDBASE - папка MIDBASE рядом с base
-        new_format_path = os.path.join(parent_path, "MIDBASE")
-        # Старый: MIDBASE_{selected_task_id} - на уровень выше
-        old_format_path = os.path.join(os.path.dirname(parent_path), f"MIDBASE_{selected_task_id}")
+        # Новый формат: {task_id}/MIDBASE
+        new_format_path = os.path.normpath(os.path.join(parent_path, "MIDBASE"))
+        # Старый формат: MIDBASE_{task_id}
+        old_format_path = os.path.normpath(os.path.join(os.path.dirname(parent_path), f"MIDBASE_{selected_task_id}"))
         if os.path.isdir(new_format_path):
-             midbase_path = new_format_path
+            midbase_path = new_format_path.replace("\\", "/")
         else:
-             midbase_path = old_format_path
+            midbase_path = old_format_path.replace("\\", "/")
 
     if not os.path.isdir(midbase_path):
         messagebox.showerror("Ошибка", f"Папка MIDBASE не найдена:\n{midbase_path}")
@@ -2781,6 +2963,7 @@ tk.Button(frame_win_cash, text="❌", command=kill_doscash_process, width=2)\
 # Переключатели
 usesql_var = tk.IntVar(value=int(get_usesql_value()))
 usedbsync_var = tk.IntVar(value=int(detect_consensus_value()))
+port_var = tk.StringVar(value=get_port_value())
 
 flags_frame = tk.Frame(settings_tab)
 flags_frame.pack(padx=10, pady=(0, 5), fill="x")
@@ -2803,17 +2986,54 @@ usedbsync_cb = tk.Checkbutton(
 )
 usedbsync_cb.grid(row=0, column=1, sticky="w", padx=(0, 10))
 
+# Поле ввода порта
+port_inner = tk.Frame(flags_frame)
+port_inner.grid(row=0, column=2, sticky="w", padx=(0, 3))
+
+tk.Label(port_inner, text="Port:").pack(side="left")
+port_entry = tk.Entry(port_inner, textvariable=port_var, width=7)
+port_entry.pack(side="left", padx=(3, 3))
+
+def adjust_port(delta):
+    port = port_var.get().strip()
+    if not port.isdigit():
+        messagebox.showwarning("Порт", "Введите корректный номер порта (только цифры)")
+        return
+    new_port = max(1, min(65535, int(port) + delta))
+    port = str(new_port)
+    port_var.set(port)
+    apply_port(ini_path, port)
+    # Сохраняем в ini_settings задачи
+    task_id = task_id_var.get().strip()
+    if task_id:
+        data = load_data()
+        if task_id in data.get("tasks", {}):
+            if "ini_settings" not in data["tasks"][task_id]:
+                data["tasks"][task_id]["ini_settings"] = {}
+            data["tasks"][task_id]["ini_settings"]["Port"] = port
+            save_data(data)
+            print(f"[PORT] Сохранён порт {port} для задачи {task_id}")
+
+port_spin_frame = tk.Frame(port_inner)
+port_spin_frame.pack(side="left")
+
+tk.Button(port_spin_frame, text="▲", width=1, font=("Arial", 4),
+          command=partial(adjust_port, 1)).pack(side="top")
+tk.Button(port_spin_frame, text="▼", width=1, font=("Arial", 4),
+          command=partial(adjust_port, -1)).pack(side="top")
+
 upgrade_anytime_btn = tk.Button(
     flags_frame,
     text="UpgradeAnyTime",
     command=upgrade_anytime_refsrv,
     anchor="w"
 )
-upgrade_anytime_btn.grid(row=0, column=2, sticky="w", padx=(80, 0))
+upgrade_anytime_btn.grid(row=0, column=3, sticky="w", padx=(20, 0))
 
-flags_frame.grid_columnconfigure(0, weight=1)
-flags_frame.grid_columnconfigure(1, weight=1)
-flags_frame.grid_columnconfigure(2, weight=1)
+flags_frame.grid_columnconfigure(0, weight=0)
+flags_frame.grid_columnconfigure(1, weight=0)
+flags_frame.grid_columnconfigure(2, weight=0)
+flags_frame.grid_columnconfigure(3, weight=1)
 
 # ======================= Параметры из wincash.ini =======================
 station_var = tk.StringVar()
@@ -2901,10 +3121,7 @@ def apply_network_ids():
     task_id = task_id_var.get().strip()
 
     if not task_id:
-        # Дефолтный режим — сохраняем Station/Server в дефолтные настройки директории версии
-        save_wincash_params()
-        save_default_ini_settings(ini_path)
-        messagebox.showinfo("Успех", "Данные сохранены как дефолтные настройки версии")
+        messagebox.showwarning("Предупреждение", "Сначала выберите или сохраните задачу!")
         return
 
     station_value = station_var.get().strip()
@@ -3159,5 +3376,6 @@ setup_global_hotkeys()
 on_check()
 root.deiconify()
 root.mainloop()
+
 
 # pyinstaller --onefile --windowed --icon=".\.ico\иконка EngiHelp.ico" --hidden-import=tkinter --clean EngiHelp.py
