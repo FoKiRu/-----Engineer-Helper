@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.5.5"
+SCRIPT_VERSION = "v1.5.6"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -1157,6 +1157,7 @@ def toggle_usesql():
     """Обработчик чек-бокса UseSQL."""
     value = "1" if usesql_var.get() else "0"
     run_update_usesql_value(value)
+    save_usesql_to_json(value)
 
     if value == "1":
         # Галочка поставлена — проверяем refsrv.exe
@@ -1171,6 +1172,7 @@ def toggle_usedbsync():
     """Обработчик чек-бокса UseDBSync."""
     value = "1" if usedbsync_var.get() else "0"
     run_update(value)
+    save_usedbsync_to_json(value)
 
     # Если активен дефолтный режим (задача не выбрана) — сохраняем изменение в дефолты
     sync_default_settings_if_no_task()
@@ -1192,6 +1194,43 @@ def run_update_usesql_value(value):
     success = update_ini_file(INI_FILE_USESQL, value, "USESQL")
     if not success:
         messagebox.showwarning("Ошибка", "Не удалось обновить UseSQL в rk7srv.INI")
+
+def save_usesql_to_json(value):
+    """Сохраняет текущее значение UseSQL в JSON: в выбранную задачу,
+    либо в дефолтные настройки директории, если задача не выбрана."""
+    task_id = task_id_var.get().strip()
+    if task_id:
+        data = load_data()
+        if task_id in data.get("tasks", {}):
+            if "ini_settings" not in data["tasks"][task_id]:
+                data["tasks"][task_id]["ini_settings"] = {}
+            data["tasks"][task_id]["ini_settings"]["UseSQL"] = value
+            save_data(data)
+            print(f"[UseSQL] Сохранено значение {value} для задачи {task_id}")
+    else:
+        save_default_ini_settings(ini_path)
+
+def save_usedbsync_to_json(value):
+    """Сохраняет текущее значение UseDBSync в JSON: в выбранную задачу,
+    либо в дефолтные настройки директории, если задача не выбрана."""
+    task_id = task_id_var.get().strip()
+    if task_id:
+        data = load_data()
+        if task_id in data.get("tasks", {}):
+            if "ini_settings" not in data["tasks"][task_id]:
+                data["tasks"][task_id]["ini_settings"] = {}
+            if "UseDBSync" not in data["tasks"][task_id]["ini_settings"]:
+                data["tasks"][task_id]["ini_settings"]["UseDBSync"] = {}
+            # UseDBSync хранится по файлам, поэтому проставляем значение всем файлам,
+            # которые реально существуют в текущей директории (аналогично run_update)
+            for filename in FILES:
+                full_path = os.path.join(ini_path, filename)
+                if os.path.exists(full_path):
+                    data["tasks"][task_id]["ini_settings"]["UseDBSync"][filename] = value
+            save_data(data)
+            print(f"[UseDBSync] Сохранено значение {value} для задачи {task_id}")
+    else:
+        save_default_ini_settings(ini_path)
 
 # Кнопка "Открыть путь"
 def open_explorer_to_root():
@@ -2991,7 +3030,7 @@ port_inner = tk.Frame(flags_frame)
 port_inner.grid(row=0, column=2, sticky="w", padx=(0, 3))
 
 tk.Label(port_inner, text="Port:").pack(side="left")
-port_entry = tk.Entry(port_inner, textvariable=port_var, width=7)
+port_entry = tk.Entry(port_inner, textvariable=port_var, width=4)
 port_entry.pack(side="left", padx=(3, 3))
 
 def adjust_port(delta):
@@ -3028,7 +3067,7 @@ upgrade_anytime_btn = tk.Button(
     command=upgrade_anytime_refsrv,
     anchor="w"
 )
-upgrade_anytime_btn.grid(row=0, column=3, sticky="w", padx=(20, 0))
+upgrade_anytime_btn.grid(row=0, column=3, sticky="w", padx=(7, 0))
 
 flags_frame.grid_columnconfigure(0, weight=0)
 flags_frame.grid_columnconfigure(1, weight=0)
