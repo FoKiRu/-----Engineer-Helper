@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.5.7"
+SCRIPT_VERSION = "v1.5.8"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -1246,7 +1246,15 @@ def open_explorer_to_root():
 
     task_folder = os.path.join(product_root, task_id)
     if not os.path.isdir(task_folder):
-        messagebox.showwarning("Ошибка", f"Папка задачи не найдена:\n{task_folder}")
+        if os.path.isdir(product_root):
+            try:
+                os.startfile(product_root)
+            except OSError:
+                messagebox.showwarning(
+                    "Ошибка", 
+                    f"Папка задачи не найдена: {task_folder}"
+                )
+                pass
         return
 
     try:
