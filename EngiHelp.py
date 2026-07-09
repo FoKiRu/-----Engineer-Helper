@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.5.8"
+SCRIPT_VERSION = "v1.5.9"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -2164,13 +2164,19 @@ def save_task_id():
     data = load_data()
     tasks = data.get("tasks", {})
 
+    # Сохраняем versions из существующей записи (если есть)
+    existing_versions = {}
+    if task_id in tasks and "versions" in tasks[task_id]:
+        existing_versions = tasks[task_id]["versions"]
+
     task_entry = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "base_path": new_base_path.replace("\\", "/"),
         "midbase_path": midbase_path.replace("\\", "/"),
         "ini_path": path_var.get().replace("\\", "/"),
         "status": "copied",
-        "ini_settings": ini_settings
+        "ini_settings": ini_settings,
+        "versions": existing_versions
     }
 
     tasks[task_id] = task_entry
