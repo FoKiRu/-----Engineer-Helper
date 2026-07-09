@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.5.9"
+SCRIPT_VERSION = "v1.6.2"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -1235,9 +1235,9 @@ def save_usedbsync_to_json(value):
 # Кнопка "Открыть путь"
 def open_explorer_to_root():
     task_id = task_id_var.get().strip()
-    if not task_id:
-        messagebox.showwarning("Ошибка", "Сначала выберите задачу!")
-        return
+    # if not task_id:
+    #     messagebox.showwarning("Ошибка", "Сначала выберите задачу!")
+    #     return
 
     product_root = find_product_root(path_var.get())
     if not product_root:
@@ -2192,11 +2192,100 @@ def save_task_id():
     rk7srv_ini_path = os.path.join(path_var.get(), "rk7srv.INI")
     update_rk7srv_ini(rk7srv_ini_path, base_dir)
 
+    # Создаём ярлыки
+    create_task_shortcuts(task_folder, path_var.get())
+
     messagebox.showinfo(
         "Успех",
         f"Папка base скопирована как {new_base_path}!\n"
         f"Пустая папка MIDBASE создана: {midbase_path}"
     )
+
+def create_task_shortcuts(task_folder, bin_win_path):
+    """Создаёт ярлыки и ярлык папки win в папке задачи."""
+    try:
+        # 1. Ярлык папки win
+        win_folder = bin_win_path  # это и есть путь к папке win
+        if os.path.isdir(win_folder):
+            create_folder_lnk(os.path.join(task_folder, "..win.lnk"), win_folder)
+
+        # 2. refsrv.exe с ключом /desktop
+        refsrv_src = os.path.join(bin_win_path, "refsrv.exe")
+        if os.path.isfile(refsrv_src):
+            create_lnk(os.path.join(task_folder, "refsrv.lnk"), refsrv_src, "/desktop")
+
+        # 3. MIDSERV.exe с ключом /desktop
+        midsrv_src = os.path.join(bin_win_path, "MIDSERV.exe")
+        if os.path.isfile(midsrv_src):
+            create_lnk(os.path.join(task_folder, "MIDSERV.lnk"), midsrv_src, "/desktop")
+
+        # 4. rk7man.bat без ключа
+        rk7man_src = os.path.join(bin_win_path, "rk7man.bat")
+        if os.path.isfile(rk7man_src):
+            create_lnk(os.path.join(task_folder, "rk7man.lnk"), rk7man_src, "")
+
+        # 5. wincash.bat без ключа
+        wincash_src = os.path.join(bin_win_path, "wincash.bat")
+        if os.path.isfile(wincash_src):
+            create_lnk(os.path.join(task_folder, "wincash.lnk"), wincash_src, "")
+
+        print(f"[OK] Ярлыки созданы в {task_folder}")
+    except Exception as e:
+        print(f"[WARN] Не удалось создать ярлыки: {e}")
+
+def create_folder_lnk(lnk_path, target_folder):
+    """Создаёт ярлык папки (.lnk) через PowerShell."""
+    if os.path.exists(lnk_path):
+        return
+    try:
+        # Рабочая папка — родитель target_folder (bin), обратные слеши
+        bin_folder = os.path.dirname(target_folder).replace("/", "\\")
+        # Для папок нужен завершающий слеш
+        target_folder_escaped = target_folder.replace("/", "\\")
+        if not target_folder_escaped.endswith("\\"):
+            target_folder_escaped += "\\"
+        ps_script = f'''
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut("{lnk_path}")
+$Shortcut.TargetPath = "{target_folder_escaped}"
+$Shortcut.WorkingDirectory = "{bin_folder}"
+$Shortcut.Description = "..win"
+$Shortcut.Save()
+'''
+        result = subprocess.run(
+            ["powershell", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            print(f"[WARN] PowerShell error: {result.stderr}")
+    except Exception as e:
+        print(f"[WARN] create_folder_lnk failed: {e}")
+
+def create_lnk(lnk_path, target, arguments):
+    """Создаёт .lnk файл через PowerShell."""
+    if os.path.exists(lnk_path):
+        return
+    try:
+        ps_script = f'''
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut("{lnk_path}")
+$Shortcut.TargetPath = "{target}"
+$Shortcut.Arguments = "{arguments}"
+$Shortcut.WorkingDirectory = "{os.path.dirname(target)}"
+$Shortcut.Save()
+'''
+        result = subprocess.run(
+            ["powershell", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            print(f"[WARN] PowerShell error: {result.stderr}")
+    except Exception as e:
+        print(f"[WARN] create_lnk failed: {e}")
 
 # Загрузка номеров задач
 def load_task_ids():
@@ -2280,6 +2369,17 @@ def delete_task():
         except Exception as e:
             failed_paths.append((path, str(e)))
             print(f"Ошибка удаления {path}: {e}")
+
+    # === Шаг 1.5: Удаляем папку {task_id} с ярлыками ===
+    product_root = find_product_root(path_var.get())
+    if product_root:
+        task_folder_to_delete = os.path.join(product_root, selected_task_id)
+        if os.path.isdir(task_folder_to_delete):
+            try:
+                shutil.rmtree(task_folder_to_delete)
+                print(f"Папка задачи удалена: {task_folder_to_delete}")
+            except Exception as e:
+                print(f"Ошибка удаления папки задачи {task_folder_to_delete}: {e}")
 
     # Если хотя бы одна папка не удалилась — предупреждаем, но продолжаем
     if failed_paths:
@@ -2526,15 +2626,15 @@ def delete_midbase_files():
 
     # Получаем данные из JSON
     base_path = get_current_task_base_path(selected_task_id)
-    
+
     if not base_path:
         messagebox.showerror("Ошибка", f"Задача {selected_task_id} не найдена.")
         return
-    
+
     # Если есть в JSON - берём оттуда
     task_data = get_task_data(selected_task_id)
     midbase_path = task_data.get("midbase_path") if task_data else None
-    
+
     # Если в JSON нет - строим путь автоматически
     if not midbase_path:
         parent_path = os.path.dirname(base_path)
@@ -2554,17 +2654,67 @@ def delete_midbase_files():
     # Для MIDBASE нет защищённых файлов - удаляем всё
     protected_files = []
 
-    # Создаем колбэки с уже определенным путем
-    callback_with_backup = partial(proceed_with_backup_and_deletion, midbase_path, protected_files)
-    callback_without_backup = partial(proceed_with_deletion, protected_files, midbase_path, backup_path=None)
-
-    # Вызываем окно подтверждения (используем существующую функцию)
-    confirm_deletion_with_options(
+    # Вызываем окно подтверждения с тремя флагами
+    confirm_midbase_deletion(
         protected_files,
-        midbase_path,
-        callback_with_backup,
-        callback_without_backup
+        midbase_path
     )
+
+def confirm_midbase_deletion(protected_files, base_path):
+    """Диалог очистки MIDBASE с тремя флагами."""
+    win = tk.Toplevel(root)
+    win.title("Подтверждение очистки")
+    win.transient(root)
+    win.grab_set()
+    win.focus_force()
+
+    if icon_path:
+        win.iconbitmap(icon_path)
+
+    win.update_idletasks()
+    w = 380
+    h = 220
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    win.geometry(f"{w}x{h}+{x}+{y}")
+
+    msg = f"Вы действительно хотите очистить папку:\n{base_path}"
+    tk.Label(win, text=msg, justify="left", wraplength=w-20).pack(padx=10, pady=(10, 5))
+
+    # Флаги
+    keep_work_udb_var = tk.BooleanVar(value=False)
+    keep_archive_backup_var = tk.BooleanVar(value=False)
+    do_backup_var = tk.BooleanVar(value=False)
+
+    tk.Checkbutton(win, text="Сохранить WORK.UDB", variable=keep_work_udb_var).pack(anchor="w", padx=12, pady=(0, 2))
+    tk.Checkbutton(win, text="Сохранить Archive, Backup и refsdata.udb", variable=keep_archive_backup_var).pack(anchor="w", padx=12, pady=(0, 2))
+    tk.Checkbutton(win, text="Создать резервную копию", variable=do_backup_var).pack(anchor="w", padx=12, pady=(0, 5))
+
+    btn_frame = tk.Frame(win)
+    btn_frame.pack(pady=5)
+
+    def on_delete():
+        win.destroy()
+        keep_work_udb = keep_work_udb_var.get()
+        keep_archive_backup = keep_archive_backup_var.get()
+        do_backup = do_backup_var.get()
+
+        protected = []
+        if keep_work_udb:
+            protected.append("WORK.UDB")
+        if keep_archive_backup:
+            protected.extend(["Archive", "Backup", "refsdata.udb"])
+
+        callback_with_backup = partial(proceed_with_backup_and_deletion, base_path, protected)
+        callback_without_backup = partial(proceed_with_deletion, protected, base_path, backup_path=None)
+
+        if do_backup:
+            callback_with_backup()
+        else:
+            callback_without_backup()
+
+    tk.Button(btn_frame, text="Очистить", command=on_delete).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Отмена", command=win.destroy).pack(side="left", padx=5)
     
 def confirm_deletion_with_options(protected_files, base_path, callback_with_backup, callback_without_backup):
     win = tk.Toplevel(root)
