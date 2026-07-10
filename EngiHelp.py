@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.6.2"
+SCRIPT_VERSION = "v1.6.5"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -311,6 +311,11 @@ if ini_path and os.path.exists(INI_FILE_USESQL):
         task_id_var.set(task_id)  # Теперь task_id_var существует
     else:
         task_id_var.set("")
+else:
+    task_id_var.set("")
+
+# Инициализируем _prev_task_id для корректного сохранения при смене задачи
+_prev_task_id = task_id_var.get().strip()
 
 # Открываем номер задачи в SD
 def open_task_in_sd():
@@ -1276,10 +1281,20 @@ def apply_path_silent():
         save_settings_and_path(ini_path)
 
 def on_task_selected(event):
+    global _prev_task_id
+
+    # Запоминаем старую задачу ДО обновления
+    old_task_id = _prev_task_id
+
+    # Перед сменой сохраняем данные ПРЕДЫДУЩЕЙ задачи
+    if old_task_id:
+        apply_network_ids_silent_for_task(old_task_id)
+
     selected_task_id = task_id_var.get()
     if not selected_task_id:
         # Пустая строка — применяем дефолтные настройки выбранной директории версии
         apply_default_ini_settings(ini_path)
+        _prev_task_id = ""
         return
 
     data = load_data()
@@ -1293,8 +1308,12 @@ def on_task_selected(event):
     # === ПРОВЕРКА НА НЕСКОЛЬКО ВЕРСИЙ ===
     versions = task_info.get("versions", {})
     if len(versions) > 1:
-        show_version_selection_dialog(selected_task_id, task_info, versions)
+        # Не обновляем _prev_task_id — это сделает диалог при подтверждении
+        show_version_selection_dialog(selected_task_id, task_info, versions, old_task_id)
         return
+
+    # Если нет нескольких версий — обновляем _prev_task_id сразу
+    _prev_task_id = selected_task_id
 
     # --- ЛОГИКА ПЕРЕМЕЩЕНИЯ ЗАДАЧИ НА ВТОРУЮ ПОЗИЦИЮ (после пустой строки) ---
     task_keys = list(tasks.keys())
@@ -1672,7 +1691,7 @@ def perform_version_change(task_id, current_version, target_version):
 
 # ======================= Выбор версии при переключении задачи =======================
 
-def show_version_selection_dialog(task_id, task_info, versions):
+def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
     """Диалог выбора версии при выборе задачи с несколькими версиями."""
     select_win = tk.Toplevel(root)
     select_win.title("Выбор версии RK")
@@ -1742,6 +1761,12 @@ def show_version_selection_dialog(task_id, task_info, versions):
         selected_ver = version_var_local.get()
         if not selected_ver:
             return
+        # Перед сменой версии сохраняем данные предыдущей задачи
+        if prev_task_id:
+            apply_network_ids_silent_for_task(prev_task_id)
+        # Обновляем _prev_task_id
+        global _prev_task_id
+        _prev_task_id = task_id
         select_win.destroy()
         apply_task_version(task_id, selected_ver)
 
@@ -1825,6 +1850,10 @@ def apply_task_version(task_id, selected_version):
         mid_parent = os.path.basename(os.path.dirname(midbase_path))
         midbase_folder_name = os.path.join(mid_parent, mid_name) if mid_name == "MIDBASE" else mid_name
         update_rkeeper_ini_basepath(ini_path_from_version, midbase_folder_name)
+
+    # Обновляем _prev_task_id после успешного применения версии
+    global _prev_task_id
+    _prev_task_id = task_id
 
     on_check()
 
@@ -1927,7 +1956,7 @@ task_id_combobox = ttk.Combobox(
     font=("TkDefaultFont", 9)
 )
 task_id_combobox.pack(side="left", padx=(1, 0))
-task_id_combobox.bind("<<ComboboxSelected>>", on_task_selected)
+# trace_add на task_id_var заменяет <<ComboboxSelected>> — работает и при смене, и при выборе той же задачи
 
 def _on_click(event):
     # Стрелка находится в правой части, проверяем координату x
@@ -1961,7 +1990,19 @@ else:
     task_id_combobox.current(0)
 
 # Привяжите сохранение к событию изменения текста в поле (опционально)
-task_id_var.trace_add("write", lambda *args: save_task_id_to_file())
+_task_selection_initialized = False  # Флаг для пропуска первого вызова trace
+
+def _on_task_id_change(*_):
+    """Callback для trace_add — вызывается при любом изменении task_id_var."""
+    global _prev_task_id, _task_selection_initialized
+    # Пропускаем первый вызов при инициализации
+    if not _task_selection_initialized:
+        _task_selection_initialized = True
+        _prev_task_id = task_id_var.get().strip()  # Инициализируем _prev_task_id
+        return
+    on_task_selected(None)
+
+task_id_var.trace_add("write", _on_task_id_change)
 
 def save_task_id_to_file():
     task_id = task_id_var.get().strip()
@@ -3321,6 +3362,19 @@ def apply_network_ids():
         messagebox.showwarning("Предупреждение", "Сначала выберите или сохраните задачу!")
         return
 
+    apply_network_ids_silent()
+    messagebox.showinfo("Успех", f"Данные сохранены для задачи {task_id}")
+
+def apply_network_ids_silent():
+    """Сохраняет Station и Server в JSON без показа messagebox (для фонового сохранения при смене задачи)."""
+    task_id = task_id_var.get().strip()
+    apply_network_ids_silent_for_task(task_id)
+
+def apply_network_ids_silent_for_task(task_id):
+    """Сохраняет Station и Server в JSON для указанной задачи (без messagebox)."""
+    if not task_id:
+        return
+
     station_value = station_var.get().strip()
     server_value = server_var.get().strip()
 
@@ -3328,24 +3382,35 @@ def apply_network_ids():
     tasks = data.get("tasks", {})
 
     if task_id not in tasks:
-        messagebox.showwarning("Предупреждение", f"Задача {task_id} не найдена в EngiHelp_data.json")
         return
 
-    # Обновляем ini_settings внутри задачи
-    if "ini_settings" not in tasks[task_id]:
-        tasks[task_id]["ini_settings"] = {}
+    task_data = tasks[task_id]
 
-    tasks[task_id]["ini_settings"]["Station"] = station_value
-    tasks[task_id]["ini_settings"]["Server"] = server_value
+    # Обновляем ini_settings внутри основной задачи
+    if "ini_settings" not in task_data:
+        task_data["ini_settings"] = {}
 
-    # Если хотите, чтобы в json всегда были актуальные значения в самой задаче
+    task_data["ini_settings"]["Station"] = station_value
+    task_data["ini_settings"]["Server"] = server_value
+
+    # Если у задачи есть версии - обновляем только АКТИВНУЮ версию (по ini_path)
+    versions = task_data.get("versions", {})
+    if versions:
+        active_ini_path = task_data.get("ini_path", "")
+        for _, version_data in versions.items():
+            if version_data.get("ini_path") == active_ini_path:
+                # Нашли активную версию - обновляем её
+                if "ini_settings" not in version_data:
+                    version_data["ini_settings"] = {}
+                version_data["ini_settings"]["Station"] = station_value
+                version_data["ini_settings"]["Server"] = server_value
+                break  # Нашли активную версию, выходим
+
     data["tasks"] = tasks
     save_data(data)
 
     # Дополнительно применяем в реальные ini-файлы
     save_wincash_params()
-
-    messagebox.showinfo("Успех", f"Данные сохранены для задачи {task_id}")
 
 # === UI ===
 info_frame = tk.LabelFrame(settings_tab, text="Сетевые ID")
