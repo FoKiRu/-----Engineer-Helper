@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.6.5"
+SCRIPT_VERSION = "v1.6.7"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -2294,10 +2294,11 @@ $Shortcut.Description = "..win"
 $Shortcut.Save()
 '''
         result = subprocess.run(
-            ["powershell", "-Command", ps_script],
+            ["powershell", "-WindowStyle", "Hidden", "-Command", ps_script],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
         if result.returncode != 0:
             print(f"[WARN] PowerShell error: {result.stderr}")
@@ -2318,10 +2319,11 @@ $Shortcut.WorkingDirectory = "{os.path.dirname(target)}"
 $Shortcut.Save()
 '''
         result = subprocess.run(
-            ["powershell", "-Command", ps_script],
+            ["powershell", "-WindowStyle", "Hidden", "-Command", ps_script],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
         if result.returncode != 0:
             print(f"[WARN] PowerShell error: {result.stderr}")
@@ -2440,7 +2442,7 @@ def delete_task():
 
     # === Шаг 3: Обновляем интерфейс ===
     task_id_combobox['values'] = load_task_ids()
-    task_id_combobox.current(1)  # Всегда показывать пустую строку первой при открытии
+    task_id_combobox.current(0)  # Выбираем пустую строку
     task_id_var.set("")
 
     # Формируем итоговое сообщение
