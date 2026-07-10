@@ -3546,7 +3546,7 @@ def get_short_path_name(long_path):
 
 # Проверка версии
 def check_for_updates(silent=False):
-    url_exe = "https://github.com/FoKiRu/-----Engineer-Helper/raw/main/dist/EngiHelp.exe"
+    url_exe = f"https://github.com/FoKiRu/-----Engineer-Helper/raw/main/dist/EngiHelp_{SCRIPT_VERSION}.exe"
     url_py = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/EngiHelp.py"
     try:
         version_response = requests.get(url_py, timeout=5)
@@ -3571,7 +3571,7 @@ def check_for_updates(silent=False):
         response = requests.get(url_exe, timeout=10)
         response.raise_for_status()
         temp_dir = tempfile.gettempdir()
-        temp_exe = os.path.join(temp_dir, "EngiHelp_updated.exe")
+        temp_exe = os.path.join(temp_dir, f"EngiHelp_{SCRIPT_VERSION}_updated.exe")
         with open(temp_exe, "wb") as f:
             f.write(response.content)
         current_exe = sys.executable
