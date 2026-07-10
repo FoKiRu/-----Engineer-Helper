@@ -1870,54 +1870,49 @@ def get_focused_widget():
 
 def copy_text_global():
     """Копирование текста при Ctrl+C (работает при любой раскладке)"""
-    try:
-        widget = get_focused_widget()
-        if widget and hasattr(widget, 'selection_get'):
-            text = widget.selection_get()
-            root.clipboard_clear()
-            root.clipboard_append(text)
-    except:
-        pass
-
-def unbind_ctrl_v_recursive(widget):
-    """Отключает Ctrl+V для виджета и его дочерних элементов"""
-    try:
-        widget.unbind('<Control-v>')
-    except tk.TclError:
-        pass
-    for child in widget.winfo_children():
-        unbind_ctrl_v_recursive(child)
+    def _do_copy():
+        try:
+            widget = get_focused_widget()
+            if widget and hasattr(widget, 'selection_get'):
+                text = widget.selection_get()
+                root.clipboard_clear()
+                root.clipboard_append(text)
+        except:
+            pass
+    root.after(0, _do_copy)
 
 def paste_text_global():
     """Вставка текста при Ctrl+V (работает при любой раскладке)"""
-    try:
-        widget = get_focused_widget()
-        if widget and hasattr(widget, 'delete') and hasattr(widget, 'insert'):
-            text = root.clipboard_get()
-            widget.delete(0, tk.END)
-            widget.insert(0, text)
-    except:
-        pass
+    def _do_paste():
+        try:
+            widget = get_focused_widget()
+            if widget and hasattr(widget, 'delete') and hasattr(widget, 'insert'):
+                text = root.clipboard_get()
+                widget.delete(0, tk.END)
+                widget.insert(0, text)
+        except:
+            pass
+    root.after(0, _do_paste)
 
 def cut_text_global():
     """Вырезание текста при Ctrl+X (работает при любой раскладке)"""
-    try:
-        widget = get_focused_widget()
-        if widget and hasattr(widget, 'selection_get') and hasattr(widget, 'delete'):
-            text = widget.selection_get()
-            root.clipboard_clear()
-            root.clipboard_append(text)
-            widget.delete(0, tk.END)
-    except:
-        pass
+    def _do_cut():
+        try:
+            widget = get_focused_widget()
+            if widget and hasattr(widget, 'selection_get') and hasattr(widget, 'delete'):
+                text = widget.selection_get()
+                root.clipboard_clear()
+                root.clipboard_append(text)
+                widget.delete(0, tk.END)
+        except:
+            pass
+    root.after(0, _do_cut)
 
 def setup_global_hotkeys():
     """Регистрирует глобальные горячие клавиши"""
-    for widget in root.winfo_children():
-        unbind_ctrl_v_recursive(widget)
-    keyboard.add_hotkey('ctrl+c', copy_text_global)
-    keyboard.add_hotkey('ctrl+v', paste_text_global)
-    keyboard.add_hotkey('ctrl+x', cut_text_global)
+    keyboard.add_hotkey('ctrl+c', copy_text_global, suppress=True)
+    keyboard.add_hotkey('ctrl+v', paste_text_global, suppress=True)
+    keyboard.add_hotkey('ctrl+x', cut_text_global, suppress=True)
 
 def on_closing():
     """Очищает горячие клавиши перед закрытием"""
@@ -3557,7 +3552,7 @@ def get_short_path_name(long_path):
 
 # Проверка версии
 def check_for_updates(silent=False):
-    url_exe = f"https://github.com/FoKiRu/-----Engineer-Helper/raw/main/dist/EngiHelp_{SCRIPT_VERSION}.exe"
+    url_exe = "https://github.com/FoKiRu/-----Engineer-Helper/raw/main/dist/EngiHelp.exe"
     url_py = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/EngiHelp.py"
     try:
         version_response = requests.get(url_py, timeout=5)
@@ -3582,14 +3577,11 @@ def check_for_updates(silent=False):
         response = requests.get(url_exe, timeout=10)
         response.raise_for_status()
         temp_dir = tempfile.gettempdir()
-        temp_exe = os.path.join(temp_dir, f"EngiHelp_{SCRIPT_VERSION}_updated.exe")
+        temp_exe = os.path.join(temp_dir, "EngiHelp_updated.exe")
         with open(temp_exe, "wb") as f:
             f.write(response.content)
         current_exe = sys.executable
-        current_pid = os.getpid()
-        new_exe_name = f"EngiHelp_{SCRIPT_VERSION}.exe"
-        exe_dir = os.path.dirname(current_exe)
-        new_exe_path = os.path.join(exe_dir, new_exe_name)
+        short_exe = get_short_path_name(current_exe)
         bat_path = os.path.join(temp_dir, "restart_engihelp.bat")
         with open(bat_path, "w", encoding="utf-8") as f:
             f.write(f"""@echo off
@@ -3597,15 +3589,14 @@ def check_for_updates(silent=False):
         echo Обновление завершено.
         echo Ожидание завершения старой версии...
         :waitloop
-        tasklist /fi "PID eq {current_pid}" | find /i "{current_pid}" >nul
+        tasklist | find /i "{os.path.basename(short_exe)}" >nul
         if not errorlevel 1 (
             timeout /t 1 >nul
             goto waitloop
         )
         echo Замена файла...
-        del /f /q "{current_exe}"
-        move /y "{temp_exe}" "{new_exe_path}"
-        start "" "{new_exe_path}"
+        copy /y "{temp_exe}" "{short_exe}"
+        start "" "{short_exe}"
         echo Запуск новой версии примерно через:
         for /l %%i in (8,-1,1) do (
             echo %%i...
