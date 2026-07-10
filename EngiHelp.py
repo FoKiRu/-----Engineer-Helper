@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.6.7"
+SCRIPT_VERSION = "v1.6.8"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -1879,6 +1879,15 @@ def copy_text_global():
     except:
         pass
 
+def unbind_ctrl_v_recursive(widget):
+    """Отключает Ctrl+V для виджета и его дочерних элементов"""
+    try:
+        widget.unbind('<Control-v>')
+    except tk.TclError:
+        pass
+    for child in widget.winfo_children():
+        unbind_ctrl_v_recursive(child)
+
 def paste_text_global():
     """Вставка текста при Ctrl+V (работает при любой раскладке)"""
     try:
@@ -1904,6 +1913,8 @@ def cut_text_global():
 
 def setup_global_hotkeys():
     """Регистрирует глобальные горячие клавиши"""
+    for widget in root.winfo_children():
+        unbind_ctrl_v_recursive(widget)
     keyboard.add_hotkey('ctrl+c', copy_text_global)
     keyboard.add_hotkey('ctrl+v', paste_text_global)
     keyboard.add_hotkey('ctrl+x', cut_text_global)
@@ -3575,7 +3586,10 @@ def check_for_updates(silent=False):
         with open(temp_exe, "wb") as f:
             f.write(response.content)
         current_exe = sys.executable
-        short_exe = get_short_path_name(current_exe)
+        current_pid = os.getpid()
+        new_exe_name = f"EngiHelp_{SCRIPT_VERSION}.exe"
+        exe_dir = os.path.dirname(current_exe)
+        new_exe_path = os.path.join(exe_dir, new_exe_name)
         bat_path = os.path.join(temp_dir, "restart_engihelp.bat")
         with open(bat_path, "w", encoding="utf-8") as f:
             f.write(f"""@echo off
@@ -3583,14 +3597,15 @@ def check_for_updates(silent=False):
         echo Обновление завершено.
         echo Ожидание завершения старой версии...
         :waitloop
-        tasklist | find /i "{os.path.basename(short_exe)}" >nul
+        tasklist /fi "PID eq {current_pid}" | find /i "{current_pid}" >nul
         if not errorlevel 1 (
             timeout /t 1 >nul
             goto waitloop
         )
         echo Замена файла...
-        copy /y "{temp_exe}" "{short_exe}"
-        start "" "{short_exe}"
+        del /f /q "{current_exe}"
+        move /y "{temp_exe}" "{new_exe_path}"
+        start "" "{new_exe_path}"
         echo Запуск новой версии примерно через:
         for /l %%i in (8,-1,1) do (
             echo %%i...
