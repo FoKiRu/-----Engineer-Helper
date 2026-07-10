@@ -1868,11 +1868,21 @@ def get_focused_widget():
     except:
         return None
 
+def is_our_focus():
+    """Проверяет, находится ли фокус в нашем приложении"""
+    try:
+        widget = root.focus_get()
+        return widget is not None
+    except:
+        return False
+
 def copy_text_global():
     """Копирование текста при Ctrl+C (работает при любой раскладке)"""
+    if not is_our_focus():
+        return
     def _do_copy():
         try:
-            widget = get_focused_widget()
+            widget = root.focus_get()
             if widget and hasattr(widget, 'selection_get'):
                 text = widget.selection_get()
                 root.clipboard_clear()
@@ -1883,9 +1893,11 @@ def copy_text_global():
 
 def paste_text_global():
     """Вставка текста при Ctrl+V (работает при любой раскладке)"""
+    if not is_our_focus():
+        return
     def _do_paste():
         try:
-            widget = get_focused_widget()
+            widget = root.focus_get()
             if widget and hasattr(widget, 'delete') and hasattr(widget, 'insert'):
                 text = root.clipboard_get()
                 widget.delete(0, tk.END)
@@ -1896,9 +1908,11 @@ def paste_text_global():
 
 def cut_text_global():
     """Вырезание текста при Ctrl+X (работает при любой раскладке)"""
+    if not is_our_focus():
+        return
     def _do_cut():
         try:
-            widget = get_focused_widget()
+            widget = root.focus_get()
             if widget and hasattr(widget, 'selection_get') and hasattr(widget, 'delete'):
                 text = widget.selection_get()
                 root.clipboard_clear()
@@ -1910,9 +1924,9 @@ def cut_text_global():
 
 def setup_global_hotkeys():
     """Регистрирует глобальные горячие клавиши"""
-    keyboard.add_hotkey('ctrl+c', copy_text_global, suppress=True)
-    keyboard.add_hotkey('ctrl+v', paste_text_global, suppress=True)
-    keyboard.add_hotkey('ctrl+x', cut_text_global, suppress=True)
+    keyboard.add_hotkey('ctrl+c', copy_text_global)
+    keyboard.add_hotkey('ctrl+v', paste_text_global)
+    keyboard.add_hotkey('ctrl+x', cut_text_global)
 
 def on_closing():
     """Очищает горячие клавиши перед закрытием"""
