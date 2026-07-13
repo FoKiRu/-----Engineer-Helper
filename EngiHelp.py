@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.6.8"
+SCRIPT_VERSION = "v1.7.0"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -133,25 +133,24 @@ def check_gitignore_status():
     Функция для получения первой строки из файла .gitignore на GitHub.
     Если первая строка равна "0", программа продолжит выполнение,
     если "1", программа завершит выполнение.
+    Если запрос не удался (timeout, блокировка и т.д.) — запускается с предупреждением.
     """
     try:
-        response = requests.get(GITHUB_URL)
-          # Стало, на всякий, если git заблокируют(только для теста, это снижает безопасность):
-          #response = requests.get(GITHUB_URL, verify=False)
-        response.raise_for_status()  # Проверка на успешный ответ (200)
-        # Чтение первой строки
+        response = requests.get(GITHUB_URL, timeout=5)
+        response.raise_for_status()
         first_line = response.text.splitlines()[0].strip()
 
         if first_line == "0":
-            return True  # Программа может продолжить выполнение
+            return True
         elif first_line == "1":
-            return False  # Программа не будет запускаться
-        else:
-            print(f"Неожиданный формат в .gitignore: {first_line}. Программа не будет запускаться.")
             return False
+        else:
+            print(f"Неожиданный формат в .gitignore: {first_line}. Программа запускается.")
+            return True
     except requests.RequestException as e:
-        print(f"Ошибка при запросе к GitHub: {e}")
-        return False
+        print(f"[WARN] Не удалось проверить статус на GitHub: {e}")
+        print("[WARN] Программа запускается в обход проверки.")
+        return True
 
 # Проверяем статус в .gitignore
 if not check_gitignore_status():
@@ -1289,6 +1288,7 @@ def on_task_selected(event):
     # Перед сменой сохраняем данные ПРЕДЫДУЩЕЙ задачи
     if old_task_id:
         apply_network_ids_silent_for_task(old_task_id)
+        apply_ini_flags_silent_for_task(old_task_id)
 
     selected_task_id = task_id_var.get()
     if not selected_task_id:
@@ -1764,6 +1764,7 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
         # Перед сменой версии сохраняем данные предыдущей задачи
         if prev_task_id:
             apply_network_ids_silent_for_task(prev_task_id)
+            apply_ini_flags_silent_for_task(prev_task_id)
         # Обновляем _prev_task_id
         global _prev_task_id
         _prev_task_id = task_id
@@ -3433,6 +3434,48 @@ def apply_network_ids_silent_for_task(task_id):
 
     # Дополнительно применяем в реальные ini-файлы
     save_wincash_params()
+
+def apply_ini_flags_silent_for_task(task_id):
+    """Сохраняет UseSQL и UseDBSync в JSON для указанной задачи (при смене задачи)."""
+    if not task_id:
+        return
+
+    data = load_data()
+    tasks = data.get("tasks", {})
+
+    if task_id not in tasks:
+        return
+
+    task_data = tasks[task_id]
+    if "ini_settings" not in task_data:
+        task_data["ini_settings"] = {}
+
+    # UseSQL
+    task_data["ini_settings"]["UseSQL"] = "1" if usesql_var.get() else "0"
+
+    # UseDBSync — хранится пофайлово, проходим по реально существующим файлам
+    if "UseDBSync" not in task_data["ini_settings"]:
+        task_data["ini_settings"]["UseDBSync"] = {}
+    usedbsync_value = "1" if usedbsync_var.get() else "0"
+    for filename in FILES:
+        full_path = os.path.join(ini_path, filename)
+        if os.path.exists(full_path):
+            task_data["ini_settings"]["UseDBSync"][filename] = usedbsync_value
+
+    # Если у задачи есть версии - обновляем только АКТИВНУЮ версию
+    versions = task_data.get("versions", {})
+    if versions:
+        active_ini_path = task_data.get("ini_path", "")
+        for _, version_data in versions.items():
+            if version_data.get("ini_path") == active_ini_path:
+                if "ini_settings" not in version_data:
+                    version_data["ini_settings"] = {}
+                version_data["ini_settings"]["UseSQL"] = task_data["ini_settings"]["UseSQL"]
+                version_data["ini_settings"]["UseDBSync"] = task_data["ini_settings"]["UseDBSync"]
+                break
+
+    data["tasks"] = tasks
+    save_data(data)
 
 # === UI ===
 info_frame = tk.LabelFrame(settings_tab, text="Сетевые ID")
