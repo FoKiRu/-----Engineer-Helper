@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.7.0"
+SCRIPT_VERSION = "v1.7.5"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru"
 DESCRIPTION = (
@@ -1500,6 +1500,7 @@ def change_rk_version():
     # Ищем доступные версии
     available_versions = find_available_rk_versions(current_ini_path)
     other_versions = [v for v in available_versions if v != current_version]
+    other_versions = sorted(other_versions, reverse=True)  # новые версии сверху
 
     if not other_versions:
         messagebox.showinfo("Информация",
@@ -1588,15 +1589,24 @@ def perform_version_change(task_id, current_version, target_version):
     # Новый формат: .../197034/base
     base_name = os.path.basename(current_base_path)  # "base" или "base_197034"
     base_parent = os.path.basename(os.path.dirname(current_base_path))  # task_id или product_root
+    current_product_root_name = os.path.basename(current_product_root)
     if base_name == "base":
-        # Новый формат: создаём {task_id}/base в целевом продукте
-        target_task_folder = os.path.join(target_product_root, base_parent)
-        target_base_path = os.path.join(target_task_folder, "base").replace("\\", "/")
-        base_folder_name = os.path.join(base_parent, "base")  # для INI
+        if base_parent == current_product_root_name:
+            # Текущая base дефолтная, без привязки к номеру задачи (.../bin/../base).
+            # Исходную папку не трогаем, а в целевой версии создаём base уже с номером задачи.
+            target_task_folder = os.path.join(target_product_root, task_id)
+            target_base_path = os.path.join(target_task_folder, "base").replace("\\", "/")
+            base_folder_name = os.path.join(task_id, "base")  # для INI
+        else:
+            # Новый формат: создаём {task_id}/base в целевом продукте
+            target_task_folder = os.path.join(target_product_root, base_parent)
+            target_base_path = os.path.join(target_task_folder, "base").replace("\\", "/")
+            base_folder_name = os.path.join(base_parent, "base")  # для INI
     else:
-        # Старый формат: base_197034
-        target_base_path = os.path.join(target_product_root, base_name).replace("\\", "/")
-        base_folder_name = base_name
+        # Старый формат: base_197034 — конвертируем в новый формат {task_id}/base
+        target_task_folder = os.path.join(target_product_root, task_id)
+        target_base_path = os.path.join(target_task_folder, "base").replace("\\", "/")
+        base_folder_name = os.path.join(task_id, "base")  # для INI
     target_base_template = os.path.join(target_product_root, "base")  # Шаблонная папка base в новой версии
 
     # Список файлов-шаблонов (измените имена, если нужно)
@@ -1641,12 +1651,19 @@ def perform_version_change(task_id, current_version, target_version):
         mid_name = os.path.basename(current_midbase)  # "MIDBASE" или "MIDBASE_197034"
         mid_parent = os.path.basename(os.path.dirname(current_midbase))
         if mid_name == "MIDBASE":
-            # Новый формат: {task_id}/MIDBASE
-            target_task_folder = os.path.join(target_product_root, mid_parent)
-            target_midbase_path = os.path.join(target_task_folder, "MIDBASE").replace("\\", "/")
+            if mid_parent == current_product_root_name:
+                # Текущая MIDBASE дефолтная, без привязки к номеру задачи.
+                # В целевой версии создаём MIDBASE уже с номером задачи.
+                target_task_folder = os.path.join(target_product_root, task_id)
+                target_midbase_path = os.path.join(target_task_folder, "MIDBASE").replace("\\", "/")
+            else:
+                # Новый формат: {task_id}/MIDBASE
+                target_task_folder = os.path.join(target_product_root, mid_parent)
+                target_midbase_path = os.path.join(target_task_folder, "MIDBASE").replace("\\", "/")
         else:
-            # Старый формат: MIDBASE_197034
-            target_midbase_path = os.path.join(target_product_root, mid_name).replace("\\", "/")
+            # Старый формат: MIDBASE_197034 — конвертируем в новый формат {task_id}/MIDBASE
+            target_task_folder = os.path.join(target_product_root, task_id)
+            target_midbase_path = os.path.join(target_task_folder, "MIDBASE").replace("\\", "/")
         if os.path.exists(target_midbase_path): shutil.rmtree(target_midbase_path)
         os.makedirs(target_midbase_path, exist_ok=True)
 
@@ -1691,6 +1708,86 @@ def perform_version_change(task_id, current_version, target_version):
 
 # ======================= Выбор версии при переключении задачи =======================
 
+def delete_task_version(task_id, del_ver, select_win):
+    """Удаляет версию из task_info["versions"] в JSON и папки base/MIDBASE с диска."""
+    data = load_data()
+    tasks = data.get("tasks", {})
+    task_info = tasks.get(task_id)
+    if not task_info:
+        return
+    versions = task_info.get("versions", {})
+    ver_data = versions.get(del_ver)
+    if not ver_data:
+        return
+
+    # Собираем папки для удаления
+    paths_to_delete = []
+    if ver_data.get("base_path"):
+        paths_to_delete.append(ver_data["base_path"])
+    if ver_data.get("midbase_path"):
+        paths_to_delete.append(ver_data["midbase_path"])
+        # Если MIDBASE лежит внутри папки {task_id} (новый формат) — удаляем и родителя если пусто
+        mid_path = ver_data["midbase_path"]
+        mid_name = os.path.basename(mid_path)
+        if mid_name == "MIDBASE":
+            mid_parent = os.path.dirname(mid_path)
+            mid_parent_name = os.path.basename(mid_parent)
+            # Это новый формат {task_id}/MIDBASE?
+            if mid_parent_name == del_ver or mid_parent_name == task_id:
+                # Проверяем, есть ли что-то кроме base и MIDBASE
+                if os.path.isdir(mid_parent):
+                    children = set(os.listdir(mid_parent))
+                    if children <= {"base", "MIDBASE"}:
+                        paths_to_delete.append(mid_parent)
+    # Аналогично для base
+    base_path = ver_data.get("base_path", "")
+    if base_path:
+        base_name = os.path.basename(base_path)
+        if base_name == "base":
+            base_parent = os.path.dirname(base_path)
+            base_parent_name = os.path.basename(base_parent)
+            if base_parent_name == del_ver or base_parent_name == task_id:
+                if os.path.isdir(base_parent):
+                    children = set(os.listdir(base_parent))
+                    if children <= {"base", "MIDBASE"}:
+                        if base_parent not in paths_to_delete:
+                            paths_to_delete.append(base_parent)
+
+    existing = [p for p in paths_to_delete if os.path.exists(p)]
+    confirm_msg = f"Удалить версию {del_ver} из задачи {task_id}?"
+    if existing:
+        confirm_msg += f"\n\nБудут удалены папки ({len(existing)} шт.):\n" + "\n".join(existing)
+    confirm_msg += "\n\nВосстановить будет невозможно."
+
+    if not messagebox.askyesno("Удаление версии", confirm_msg):
+        return
+
+    # Удаляем папки с диска
+    failed = []
+    for p in existing:
+        try:
+            shutil.rmtree(p)
+            print(f"Папка удалена: {p}")
+        except Exception as e:
+            failed.append((p, str(e)))
+            print(f"Ошибка удаления {p}: {e}")
+
+    if failed:
+        err_detail = "\n".join(f"• {p}: {e}" for p, e in failed)
+        messagebox.showwarning("Частичная ошибка", f"Не удалось удалить некоторые папки:\n{err_detail}")
+
+    # Удаляем версию из JSON
+    del versions[del_ver]
+    if not versions:
+        messagebox.showinfo("Информация", "У задачи больше нет дополнительных версий.")
+        select_win.destroy()
+        return
+
+    save_data(data)
+    select_win.destroy()
+    show_version_selection_dialog(task_id, task_info, versions, None)
+
+
 def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
     """Диалог выбора версии при выборе задачи с несколькими версиями."""
     select_win = tk.Toplevel(root)
@@ -1709,10 +1806,10 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
     current_ver = extract_rk_version_from_path(task_info.get("ini_path", ""))
 
     # Динамическая высота
-    row_height = 28
+    row_height = 32
     base_height = 140
     h = base_height + len(version_list) * row_height
-    w = 260
+    w = 280
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     select_win.geometry(f"{w}x{h}+{x}+{y}")
@@ -1734,38 +1831,43 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
 
     # Внешний фрейм-контейнер — центрируется в окне
     center_container = tk.Frame(select_win)
-    center_container.pack(pady=5, expand=True)  # expand=True → центр по вертикали/горизонтали
+    center_container.pack(pady=5, expand=True)
 
     # Внутренний фрейм — версии внутри него по левому краю
     radio_frame = tk.Frame(center_container)
     radio_frame.pack()
 
     for ver in version_list:
-        # Без "INS" / "INST" — только номер версии
         label_text = ver
         if ver == current_ver:
             label_text += "  ◀ текущая"
 
+        ver_row = tk.Frame(radio_frame)
+        ver_row.pack(anchor="w", pady=2, fill="x")
+
         rb = tk.Radiobutton(
-            radio_frame,
+            ver_row,
             text=label_text,
             variable=version_var_local,
             value=ver,
-            anchor="w",  # текст внутри кнопки — по левому краю
+            anchor="w",
             font=("TkDefaultFont", 9, "bold" if ver == current_ver else "normal")
         )
-        rb.pack(anchor="w", pady=2)  # кнопки прижаты влево внутри фрейма
+        rb.pack(side="left")
+
+        tk.Button(
+            ver_row, text="✕", width=2, relief="flat", fg="red",
+            command=partial(delete_task_version, task_id, ver, select_win)
+        ).pack(side="right", padx=(5, 0))
 
     # === Кнопки ===
     def on_select():
         selected_ver = version_var_local.get()
         if not selected_ver:
             return
-        # Перед сменой версии сохраняем данные предыдущей задачи
         if prev_task_id:
             apply_network_ids_silent_for_task(prev_task_id)
             apply_ini_flags_silent_for_task(prev_task_id)
-        # Обновляем _prev_task_id
         global _prev_task_id
         _prev_task_id = task_id
         select_win.destroy()
@@ -2677,7 +2779,7 @@ def get_task_data(task_id):
     try:
         with open(DATA_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        return data.get(task_id)
+        return data.get("tasks", {}).get(task_id)
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось прочитать конфигурацию:\n{e}")
         return None
