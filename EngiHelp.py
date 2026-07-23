@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.7.7"
+SCRIPT_VERSION = "v1.7.8"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -1511,24 +1511,20 @@ def change_rk_version():
 
     # === Диалог выбора версии ===
     select_win = tk.Toplevel(root)
-    select_win.withdraw()  # Скрываем окно, чтобы избежать мигания
+    select_win.withdraw()
     select_win.title("Сменить версию RK")
 
     if icon_path:
         select_win.iconbitmap(icon_path)
 
-    w, h = 300, 180
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    select_win.geometry(f"{w}x{h}+{x}+{y}")
-
-    # После geometry - активируем модальность и показываем окно
     select_win.transient(root)
     select_win.grab_set()
-    select_win.focus_force()
-    select_win.deiconify()
+    select_win.resizable(False, False)
 
-    tk.Label(select_win, text=(
+    frame = tk.Frame(select_win)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(frame, text=(
         f"Задача: {selected_task_id}\n"
         f"Текущая версия: {current_version}\n\n"
         f"Выберите версию для переноса базы:"
@@ -1536,14 +1532,14 @@ def change_rk_version():
 
     version_var = tk.StringVar()
     version_combo = ttk.Combobox(
-        select_win, textvariable=version_var,
+        frame, textvariable=version_var,
         values=other_versions, state="readonly", width=30
     )
     version_combo.pack(padx=10, pady=5)
     if other_versions:
         version_combo.current(0)
 
-    tk.Label(select_win, text=(
+    tk.Label(frame, text=(
         "⚠ Процессы refsrv.exe и rk7man.exe будут закрыты!"
     ), fg="red", font=("TkDefaultFont", 8)).pack(padx=10, pady=(5, 0))
 
@@ -1555,10 +1551,20 @@ def change_rk_version():
         select_win.destroy()
         perform_version_change(selected_task_id, current_version, target_version)
 
-    btn_frame = tk.Frame(select_win)
+    btn_frame = tk.Frame(frame)
     btn_frame.pack(pady=10)
     tk.Button(btn_frame, text="Перенести", command=on_confirm, width=12).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=select_win.destroy, width=12).pack(side="left", padx=5)
+
+    select_win.update_idletasks()
+    w = select_win.winfo_reqwidth()
+    h = select_win.winfo_reqheight()
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    select_win.geometry(f"{w}x{h}+{x}+{y}")
+
+    select_win.focus_force()
+    select_win.deiconify()
 
 
 def perform_version_change(task_id, current_version, target_version):
@@ -1795,53 +1801,36 @@ def delete_task_version(task_id, del_ver, select_win):
 def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
     """Диалог выбора версии при выборе задачи с несколькими версиями."""
     select_win = tk.Toplevel(root)
-    select_win.withdraw()  # Скрываем окно, чтобы избежать мигания
+    select_win.withdraw()
     select_win.title("Выбор версии RK")
 
     if icon_path:
         select_win.iconbitmap(icon_path)
 
-    # Обратный порядок версий
     version_list = list(reversed(sorted(versions.keys())))
-
-    # Определяем текущую версию
     current_ver = extract_rk_version_from_path(task_info.get("ini_path", ""))
 
-    # Динамическая высота
-    row_height = 32
-    base_height = 140
-    h = base_height + len(version_list) * row_height
-    w = 280
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    select_win.geometry(f"{w}x{h}+{x}+{y}")
-    select_win.resizable(False, False)
-
-    # После geometry - активируем модальность и показываем окно
     select_win.transient(root)
     select_win.grab_set()
-    select_win.focus_force()
-    select_win.deiconify()
+    select_win.resizable(False, False)
 
-    # Заголовок по центру
-    tk.Label(select_win, text=(
+    frame = tk.Frame(select_win)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(frame, text=(
         f"Задача {task_id} имеет несколько версий RK.\n"
         f"Выберите версию для работы:"
-    ), justify="center", anchor="center").pack(padx=10, pady=(15, 5), fill="x")
+    ), justify="center").pack(padx=10, pady=(10, 5))
 
-    # === Переменная выбора ===
     version_var_local = tk.StringVar()
-
     if current_ver in version_list:
         version_var_local.set(current_ver)
     elif version_list:
         version_var_local.set(version_list[0])
 
-    # Внешний фрейм-контейнер — центрируется в окне
-    center_container = tk.Frame(select_win)
+    center_container = tk.Frame(frame)
     center_container.pack(pady=5, expand=True)
 
-    # Внутренний фрейм — версии внутри него по левому краю
     radio_frame = tk.Frame(center_container)
     radio_frame.pack()
 
@@ -1868,7 +1857,6 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
             command=partial(delete_task_version, task_id, ver, select_win)
         ).pack(side="right", padx=(5, 0))
 
-    # === Кнопки ===
     def on_select():
         selected_ver = version_var_local.get()
         if not selected_ver:
@@ -1884,10 +1872,20 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
     def on_cancel():
         select_win.destroy()
 
-    btn_frame = tk.Frame(select_win)
+    btn_frame = tk.Frame(frame)
     btn_frame.pack(pady=10)
     tk.Button(btn_frame, text="Выбрать", command=on_select, width=12).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=on_cancel, width=12).pack(side="left", padx=5)
+
+    select_win.update_idletasks()
+    w = select_win.winfo_reqwidth()
+    h = select_win.winfo_reqheight()
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    select_win.geometry(f"{w}x{h}+{x}+{y}")
+
+    select_win.focus_force()
+    select_win.deiconify()
 
 
 def apply_task_version(task_id, selected_version):
@@ -2837,38 +2835,32 @@ def delete_midbase_files():
 def confirm_midbase_deletion(protected_files, base_path):
     """Диалог очистки MIDBASE с тремя флагами."""
     win = tk.Toplevel(root)
-    win.withdraw()  # Скрываем окно, чтобы избежать мигания
+    win.withdraw()
     win.title("Подтверждение очистки")
 
     if icon_path:
         win.iconbitmap(icon_path)
 
-    # Размеры и центрирование
-    w = 380
-    h = 220
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    win.geometry(f"{w}x{h}+{x}+{y}")
-
-    # После geometry - активируем модальность и показываем окно
     win.transient(root)
     win.grab_set()
-    win.focus_force()
-    win.deiconify()
+    win.resizable(False, False)
+
+    frame = tk.Frame(win)
+    frame.pack(fill="both", expand=True)
 
     msg = f"Вы действительно хотите очистить папку:\n{base_path}"
-    tk.Label(win, text=msg, justify="left", wraplength=w-20).pack(padx=10, pady=(10, 5))
+    tk.Label(frame, text=msg, justify="left").pack(padx=10, pady=(10, 5))
 
     # Флаги
     keep_work_udb_var = tk.BooleanVar(value=False)
     keep_archive_backup_var = tk.BooleanVar(value=False)
     do_backup_var = tk.BooleanVar(value=False)
 
-    tk.Checkbutton(win, text="Сохранить WORK.UDB", variable=keep_work_udb_var).pack(anchor="w", padx=12, pady=(0, 2))
-    tk.Checkbutton(win, text="Сохранить Archive, Backup и refsdata.udb", variable=keep_archive_backup_var).pack(anchor="w", padx=12, pady=(0, 2))
-    tk.Checkbutton(win, text="Создать резервную копию", variable=do_backup_var).pack(anchor="w", padx=12, pady=(0, 5))
+    tk.Checkbutton(frame, text="Сохранить WORK.UDB", variable=keep_work_udb_var).pack(anchor="w", padx=12, pady=(0, 2))
+    tk.Checkbutton(frame, text="Сохранить Archive, Backup и refsdata.udb", variable=keep_archive_backup_var).pack(anchor="w", padx=12, pady=(0, 2))
+    tk.Checkbutton(frame, text="Создать резервную копию", variable=do_backup_var).pack(anchor="w", padx=12, pady=(0, 5))
 
-    btn_frame = tk.Frame(win)
+    btn_frame = tk.Frame(frame)
     btn_frame.pack(pady=5)
 
     def on_delete():
@@ -2893,40 +2885,42 @@ def confirm_midbase_deletion(protected_files, base_path):
 
     tk.Button(btn_frame, text="Очистить", command=on_delete).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=win.destroy).pack(side="left", padx=5)
+
+    win.update_idletasks()
+    w = win.winfo_reqwidth()
+    h = win.winfo_reqheight()
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    win.geometry(f"{w}x{h}+{x}+{y}")
+
+    win.focus_force()
+    win.deiconify()
     
 def confirm_deletion_with_options(protected_files, base_path, callback_with_backup, callback_without_backup):
     win = tk.Toplevel(root)
-    win.withdraw()  # Скрываем окно, чтобы избежать мигания
+    win.withdraw()
     win.title("Подтверждение очистки")
 
     if icon_path:
         win.iconbitmap(icon_path)
 
-    # Размеры и центрирование
-    w = 380
-    h = 180
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    win.geometry(f"{w}x{h}+{x}+{y}")
-
-    # После geometry - активируем модальность и показываем окно
     win.transient(root)
     win.grab_set()
-    win.focus_force()
-    win.deiconify()
+    win.resizable(False, False)
+
+    frame = tk.Frame(win)
+    frame.pack(fill="both", expand=True)
 
     msg = f"Вы действительно хотите очистить папку:\n{base_path}"
-    
-    # Добавляем информацию о защищённых файлах только если они есть
     if protected_files:
         msg += f"\n\nБудут оставлены: {', '.join(protected_files)}"
-    
-    tk.Label(win, text=msg, justify="left", wraplength=w-20).pack(padx=10, pady=(10, 5))
+
+    tk.Label(frame, text=msg, justify="left").pack(padx=10, pady=(10, 5))
 
     do_backup_var = tk.BooleanVar(value=False)
-    tk.Checkbutton(win, text="Создать резервную копию", variable=do_backup_var).pack(anchor="w", padx=12, pady=(0, 5))
+    tk.Checkbutton(frame, text="Создать резервную копию", variable=do_backup_var).pack(anchor="w", padx=12, pady=(0, 5))
 
-    btn_frame = tk.Frame(win)
+    btn_frame = tk.Frame(frame)
     btn_frame.pack(pady=5)
 
     def on_delete():
@@ -2938,6 +2932,16 @@ def confirm_deletion_with_options(protected_files, base_path, callback_with_back
 
     tk.Button(btn_frame, text="Очистить", command=on_delete).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=win.destroy).pack(side="left", padx=5)
+
+    win.update_idletasks()
+    w = win.winfo_reqwidth()
+    h = win.winfo_reqheight()
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    win.geometry(f"{w}x{h}+{x}+{y}")
+
+    win.focus_force()
+    win.deiconify()
 
 # ======================= Удаление base =======================
 def delete_unwanted_files():
@@ -2974,25 +2978,28 @@ def delete_unwanted_files():
 
 def proceed_with_backup_and_deletion(base_path, protected_files):
     copying_win = tk.Toplevel(root)
-    copying_win.withdraw()  # Скрываем окно, чтобы избежать мигания
+    copying_win.withdraw()
     copying_win.title("Подождите")
 
     if icon_path:
         copying_win.iconbitmap(icon_path)
 
-    # Центрируем окно относительно главного
-    w = 260
-    h = 80
+    copying_win.transient(root)
+    copying_win.grab_set()
+    copying_win.resizable(False, False)
+
+    frame = tk.Frame(copying_win)
+    frame.pack(fill="both", expand=True)
+    tk.Label(frame, text="Создаётся резервная копия папки base...").pack(padx=15, pady=15)
+
+    copying_win.update_idletasks()
+    w = copying_win.winfo_reqwidth()
+    h = copying_win.winfo_reqheight()
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     copying_win.geometry(f"{w}x{h}+{x}+{y}")
 
-    # После geometry - активируем модальность и показываем окно
-    copying_win.transient(root)
-    copying_win.grab_set()
     copying_win.deiconify()
-
-    tk.Label(copying_win, text="Создаётся резервная копия папки base...").pack(padx=20, pady=20)
     copying_win.update()
 
     def run():
@@ -3039,27 +3046,31 @@ def proceed_with_deletion(protected_files, base_path, backup_path=None):
 def centered_info(title, message):
     """Центрированное информационное окно."""
     win = tk.Toplevel(root)
-    win.withdraw()  # Скрываем окно, чтобы избежать мигания
+    win.withdraw()
     win.title(title)
 
     if icon_path:
         win.iconbitmap(icon_path)
 
-    # Фиксированные размеры и центрирование
-    w = 400
-    h = 150
+    win.transient(root)
+    win.grab_set()
+    win.resizable(False, False)
+
+    frame = tk.Frame(win)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
+    tk.Button(frame, text="OK", command=win.destroy, width=12).pack(pady=(0, 15))
+
+    win.update_idletasks()
+    w = win.winfo_reqwidth()
+    h = win.winfo_reqheight()
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
 
-    # После geometry - делаем transient, grab и показываем
-    win.transient(root)
-    win.grab_set()
     win.focus_force()
     win.deiconify()
-
-    tk.Label(win, text=message, justify="left", wraplength=w-40).pack(padx=20, pady=15)
-    tk.Button(win, text="OK", command=win.destroy, width=15).pack(pady=(0, 10))
 
 
 def centered_warning(title, message):
@@ -3071,19 +3082,25 @@ def centered_warning(title, message):
     if icon_path:
         win.iconbitmap(icon_path)
 
-    w = 400
-    h = 150
+    win.transient(root)
+    win.grab_set()
+    win.resizable(False, False)
+
+    frame = tk.Frame(win)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
+    tk.Button(frame, text="OK", command=win.destroy, width=12).pack(pady=(0, 15))
+
+    win.update_idletasks()
+    w = win.winfo_reqwidth()
+    h = win.winfo_reqheight()
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
 
-    win.transient(root)
-    win.grab_set()
     win.focus_force()
     win.deiconify()
-
-    tk.Label(win, text=message, justify="left", wraplength=w-40).pack(padx=20, pady=15)
-    tk.Button(win, text="OK", command=win.destroy, width=15).pack(pady=(0, 10))
 
 
 def centered_error(title, message):
@@ -3095,19 +3112,25 @@ def centered_error(title, message):
     if icon_path:
         win.iconbitmap(icon_path)
 
-    w = 400
-    h = 150
+    win.transient(root)
+    win.grab_set()
+    win.resizable(False, False)
+
+    frame = tk.Frame(win)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
+    tk.Button(frame, text="OK", command=win.destroy, width=12).pack(pady=(0, 15))
+
+    win.update_idletasks()
+    w = win.winfo_reqwidth()
+    h = win.winfo_reqheight()
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
 
-    win.transient(root)
-    win.grab_set()
     win.focus_force()
     win.deiconify()
-
-    tk.Label(win, text=message, justify="left", wraplength=w-40).pack(padx=20, pady=15)
-    tk.Button(win, text="OK", command=win.destroy, width=15).pack(pady=(0, 10))
 
 
 def centered_askyesno(title, message):
@@ -3129,24 +3152,29 @@ def centered_askyesno(title, message):
     if icon_path:
         win.iconbitmap(icon_path)
 
-    w = 400
-    h = 150
+    win.transient(root)
+    win.grab_set()
+    win.resizable(False, False)
+
+    frame = tk.Frame(win)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
+
+    btn_frame = tk.Frame(frame)
+    btn_frame.pack(pady=(0, 15))
+    tk.Button(btn_frame, text="Да", command=on_yes, width=10).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Нет", command=on_no, width=10).pack(side="left", padx=5)
+
+    win.update_idletasks()
+    w = win.winfo_reqwidth()
+    h = win.winfo_reqheight()
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
 
-    win.transient(root)
-    win.grab_set()
     win.focus_force()
     win.deiconify()
-
-    tk.Label(win, text=message, justify="left", wraplength=w-40).pack(padx=20, pady=15)
-
-    btn_frame = tk.Frame(win)
-    btn_frame.pack(pady=(0, 10))
-    tk.Button(btn_frame, text="Да", command=on_yes, width=10).pack(side="left", padx=5)
-    tk.Button(btn_frame, text="Нет", command=on_no, width=10).pack(side="left", padx=5)
-
     win.wait_window()
     return result[0]
 
@@ -3170,24 +3198,29 @@ def centered_askokcancel(title, message):
     if icon_path:
         win.iconbitmap(icon_path)
 
-    w = 400
-    h = 150
+    win.transient(root)
+    win.grab_set()
+    win.resizable(False, False)
+
+    frame = tk.Frame(win)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
+
+    btn_frame = tk.Frame(frame)
+    btn_frame.pack(pady=(0, 15))
+    tk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Отмена", command=on_cancel, width=10).pack(side="left", padx=5)
+
+    win.update_idletasks()
+    w = win.winfo_reqwidth()
+    h = win.winfo_reqheight()
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
 
-    win.transient(root)
-    win.grab_set()
     win.focus_force()
     win.deiconify()
-
-    tk.Label(win, text=message, justify="left", wraplength=w-40).pack(padx=20, pady=15)
-
-    btn_frame = tk.Frame(win)
-    btn_frame.pack(pady=(0, 10))
-    tk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side="left", padx=5)
-    tk.Button(btn_frame, text="Отмена", command=on_cancel, width=10).pack(side="left", padx=5)
-
     win.wait_window()
     return result[0]
 
