@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.7.8"
+SCRIPT_VERSION = "v1.7.9"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -1519,7 +1519,6 @@ def change_rk_version():
 
     select_win.transient(root)
     select_win.grab_set()
-    select_win.resizable(False, False)
 
     frame = tk.Frame(select_win)
     frame.pack(fill="both", expand=True)
@@ -1562,6 +1561,7 @@ def change_rk_version():
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     select_win.geometry(f"{w}x{h}+{x}+{y}")
+    select_win.resizable(False, False)
 
     select_win.focus_force()
     select_win.deiconify()
@@ -1812,7 +1812,6 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
 
     select_win.transient(root)
     select_win.grab_set()
-    select_win.resizable(False, False)
 
     frame = tk.Frame(select_win)
     frame.pack(fill="both", expand=True)
@@ -1883,6 +1882,7 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     select_win.geometry(f"{w}x{h}+{x}+{y}")
+    select_win.resizable(False, False)
 
     select_win.focus_force()
     select_win.deiconify()
@@ -2502,7 +2502,7 @@ def delete_task():
 
     # base_path и midbase_path из каждой версии
     versions = task_info.get("versions", {})
-    for ver_name, ver_info in versions.items():
+    for _, ver_info in versions.items():
         _collect_path(ver_info.get("base_path"))
         _collect_path(ver_info.get("midbase_path"))
 
@@ -2843,7 +2843,6 @@ def confirm_midbase_deletion(protected_files, base_path):
 
     win.transient(root)
     win.grab_set()
-    win.resizable(False, False)
 
     frame = tk.Frame(win)
     frame.pack(fill="both", expand=True)
@@ -2892,6 +2891,7 @@ def confirm_midbase_deletion(protected_files, base_path):
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
+    win.resizable(False, False)
 
     win.focus_force()
     win.deiconify()
@@ -2906,7 +2906,6 @@ def confirm_deletion_with_options(protected_files, base_path, callback_with_back
 
     win.transient(root)
     win.grab_set()
-    win.resizable(False, False)
 
     frame = tk.Frame(win)
     frame.pack(fill="both", expand=True)
@@ -2939,6 +2938,7 @@ def confirm_deletion_with_options(protected_files, base_path, callback_with_back
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
+    win.resizable(False, False)
 
     win.focus_force()
     win.deiconify()
@@ -2986,7 +2986,6 @@ def proceed_with_backup_and_deletion(base_path, protected_files):
 
     copying_win.transient(root)
     copying_win.grab_set()
-    copying_win.resizable(False, False)
 
     frame = tk.Frame(copying_win)
     frame.pack(fill="both", expand=True)
@@ -2998,6 +2997,7 @@ def proceed_with_backup_and_deletion(base_path, protected_files):
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     copying_win.geometry(f"{w}x{h}+{x}+{y}")
+    copying_win.resizable(False, False)
 
     copying_win.deiconify()
     copying_win.update()
@@ -3054,7 +3054,6 @@ def centered_info(title, message):
 
     win.transient(root)
     win.grab_set()
-    win.resizable(False, False)
 
     frame = tk.Frame(win)
     frame.pack(fill="both", expand=True)
@@ -3063,11 +3062,12 @@ def centered_info(title, message):
     tk.Button(frame, text="OK", command=win.destroy, width=12).pack(pady=(0, 15))
 
     win.update_idletasks()
-    w = win.winfo_reqwidth()
+    w = max(win.winfo_reqwidth(), 280)
     h = win.winfo_reqheight()
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
+    win.resizable(False, False)
 
     win.focus_force()
     win.deiconify()
@@ -3084,7 +3084,6 @@ def centered_warning(title, message):
 
     win.transient(root)
     win.grab_set()
-    win.resizable(False, False)
 
     frame = tk.Frame(win)
     frame.pack(fill="both", expand=True)
@@ -3093,11 +3092,12 @@ def centered_warning(title, message):
     tk.Button(frame, text="OK", command=win.destroy, width=12).pack(pady=(0, 15))
 
     win.update_idletasks()
-    w = win.winfo_reqwidth()
+    w = max(win.winfo_reqwidth(), 280)
     h = win.winfo_reqheight()
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
+    win.resizable(False, False)
 
     win.focus_force()
     win.deiconify()
@@ -3114,7 +3114,6 @@ def centered_error(title, message):
 
     win.transient(root)
     win.grab_set()
-    win.resizable(False, False)
 
     frame = tk.Frame(win)
     frame.pack(fill="both", expand=True)
@@ -3123,11 +3122,12 @@ def centered_error(title, message):
     tk.Button(frame, text="OK", command=win.destroy, width=12).pack(pady=(0, 15))
 
     win.update_idletasks()
-    w = win.winfo_reqwidth()
+    w = max(win.winfo_reqwidth(), 280)
     h = win.winfo_reqheight()
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
+    win.resizable(False, False)
 
     win.focus_force()
     win.deiconify()
@@ -3154,7 +3154,6 @@ def centered_askyesno(title, message):
 
     win.transient(root)
     win.grab_set()
-    win.resizable(False, False)
 
     frame = tk.Frame(win)
     frame.pack(fill="both", expand=True)
@@ -3167,11 +3166,12 @@ def centered_askyesno(title, message):
     tk.Button(btn_frame, text="Нет", command=on_no, width=10).pack(side="left", padx=5)
 
     win.update_idletasks()
-    w = win.winfo_reqwidth()
+    w = max(win.winfo_reqwidth(), 280)
     h = win.winfo_reqheight()
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
+    win.resizable(False, False)
 
     win.focus_force()
     win.deiconify()
@@ -3200,7 +3200,6 @@ def centered_askokcancel(title, message):
 
     win.transient(root)
     win.grab_set()
-    win.resizable(False, False)
 
     frame = tk.Frame(win)
     frame.pack(fill="both", expand=True)
@@ -3213,11 +3212,12 @@ def centered_askokcancel(title, message):
     tk.Button(btn_frame, text="Отмена", command=on_cancel, width=10).pack(side="left", padx=5)
 
     win.update_idletasks()
-    w = win.winfo_reqwidth()
+    w = max(win.winfo_reqwidth(), 280)
     h = win.winfo_reqheight()
     x = root.winfo_x() + (root.winfo_width() - w) // 2
     y = root.winfo_y() + (root.winfo_height() - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
+    win.resizable(False, False)
 
     win.focus_force()
     win.deiconify()
