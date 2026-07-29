@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.7.9"
+SCRIPT_VERSION = "v1.8.3.1"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -3245,6 +3245,54 @@ def run_or_restart_process(exe_name):
     except Exception as e:
         centered_error("Ошибка запуска", str(e))
 
+def start_refsrv_only():
+    """Запускает refsrv.exe из текущей директории, закрывая только свой экземпляр."""
+    exe_path = os.path.join(ini_path, "refsrv.exe")
+    if not os.path.isfile(exe_path):
+        centered_error("Ошибка", f"Файл не найден:\n{exe_path}")
+        return
+
+    ini_path_norm = os.path.normpath(ini_path).lower()
+
+    # Закрываем только refsrv из текущей директории
+    for proc, exe_dir in _get_process_by_name('refsrv.exe'):
+        if exe_dir == ini_path_norm:
+            try:
+                proc.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+    time.sleep(0.5)
+
+    # Запускаем новый экземпляр
+    try:
+        subprocess.Popen(f'start "" "{exe_path}" -desktop', shell=True)
+    except Exception as e:
+        centered_error("Ошибка запуска", str(e))
+
+def start_rk7man_only():
+    """Запускает rk7man.bat из текущей директории, закрывая только свой экземпляр."""
+    ini_path_norm = os.path.normpath(ini_path).lower()
+
+    # Закрываем только rk7man из текущей директории
+    for proc, exe_dir in _get_process_by_name('rk7man.exe'):
+        if exe_dir == ini_path_norm:
+            try:
+                proc.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+    time.sleep(0.5)
+
+    bat_path = os.path.join(ini_path, "rk7man.bat")
+    if not os.path.isfile(bat_path):
+        centered_error("Ошибка", f"Файл не найден:\n{bat_path}")
+        return
+    try:
+        os.startfile(bat_path)
+    except Exception as e:
+        centered_error("Ошибка запуска", str(e))
+
 # ======================= Запуск rk7man.bat =======================
 def run_rk7man():
     for proc in psutil.process_iter(['pid', 'name']):
@@ -3298,15 +3346,93 @@ def run_wincash_bat():
 # DOSCASH.EXE нужно закрыть перед запуском если есть
 
 def run_refsrv_and_rk7man():
-    run_or_restart_process("refsrv.exe")
+    ini_path_norm = os.path.normpath(ini_path).lower()
+    current_port = get_port_value()
+
+    # Проверяем, занят ли текущий порт другим refsrv (не из текущей директории)
+    if current_port:
+        used_ports = _get_used_ports()
+        if int(current_port) in used_ports:
+            # Проверяем, есть ли refsrv на этом порту из другой директории
+            conflict = False
+            for proc, exe_dir in _get_process_by_name('refsrv.exe'):
+                if exe_dir != ini_path_norm:
+                    ports = _get_process_listening_ports(proc.pid)
+                    if int(current_port) in ports:
+                        conflict = True
+                        break
+
+            if conflict:
+                # Пробуем текущий +1, +2, +3...
+                new_port = int(current_port) + 1
+                while new_port in used_ports and new_port < int(current_port) + 100:
+                    new_port += 1
+
+                if new_port < int(current_port) + 100:
+                    server_name = get_refserver_name()
+                    if set_port_rk7srv(ini_path, str(new_port)):
+                        set_port_rk7man(ini_path, server_name, str(new_port))
+                        print(f"[PORT] Смена порта: {current_port} -> {new_port}")
+                else:
+                    centered_error("Ошибка", "Не удалось найти свободный порт")
+
+    start_refsrv_only()
     time.sleep(1.5)
-    run_rk7man()
+    start_rk7man_only()
+
+def start_midserv_only():
+    """Запускает midserv.exe из текущей директории, закрывая только свой экземпляр."""
+    exe_path = os.path.join(ini_path, "midserv.exe")
+    if not os.path.isfile(exe_path):
+        centered_error("Ошибка", f"Файл не найден:\n{exe_path}")
+        return
+
+    ini_path_norm = os.path.normpath(ini_path).lower()
+
+    # Закрываем только midserv из текущей директории
+    for proc, exe_dir in _get_process_by_name('midserv.exe'):
+        if exe_dir == ini_path_norm:
+            try:
+                proc.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+    time.sleep(0.5)
+
+    try:
+        subprocess.Popen(f'start "" "{exe_path}" -desktop', shell=True)
+    except Exception as e:
+        centered_error("Ошибка запуска", str(e))
+
+def start_wincash_only():
+    """Запускает wincash.bat из текущей директории, закрывая только свой экземпляр."""
+    ini_path_norm = os.path.normpath(ini_path).lower()
+
+    # Закрываем только doscash из текущей директории
+    for proc, exe_dir in _get_process_by_name('doscash.exe'):
+        if exe_dir == ini_path_norm:
+            try:
+                proc.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+    time.sleep(0.5)
+
+    bat_path = os.path.join(ini_path, "wincash.bat")
+    if not os.path.isfile(bat_path):
+        centered_error("Ошибка", f"Файл не найден:\n{bat_path}")
+        return
+    try:
+        subprocess.run([bat_path], shell=True, cwd=ini_path)
+    except Exception as e:
+        centered_error("Ошибка запуска", str(e))
+
 
 # ======================= Запуск MidServ + WinCash =======================
 def run_midserv_and_wincash():
-    run_or_restart_process("midserv.exe")
+    start_midserv_only()
     time.sleep(1.5)
-    run_wincash_bat()
+    start_wincash_only()
 
 # ======================= Закрыть процес =======================
 def kill_midserv_process():
@@ -3319,19 +3445,288 @@ def kill_midserv_process():
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
-def kill_rk7man_process():
+def _get_used_ports() -> set[int]:
+    """Возвращает множество портов, которые уже используются (LISTEN)."""
+    used = set()
+    try:
+        for conn in psutil.net_connections(kind='inet'):
+            if conn.laddr and conn.status == 'LISTEN':
+                used.add(conn.laddr.port)
+    except (psutil.AccessDenied, OSError):
+        pass
+    return used
+
+
+def _find_free_port(start_port: int = 6000, max_attempts: int = 100) -> int | None:
+    """Находит первый свободный порт начиная с start_port."""
+    used = _get_used_ports()
+    for port in range(start_port, start_port + max_attempts):
+        if port not in used:
+            return port
+    return None
+
+
+def _get_process_listening_ports(pid: int) -> list[int]:
+    """Возвращает список портов, которые слушает процесс с данным PID."""
+    ports = []
+    try:
+        for conn in psutil.net_connections(kind='inet'):
+            if conn.pid == pid and conn.laddr and conn.status == 'LISTEN':
+                ports.append(conn.laddr.port)
+    except (psutil.AccessDenied, OSError):
+        pass
+    return ports
+
+
+def _read_port_from_ini(ini_dir: str) -> str | None:
+    """Читает PORT из [TCPSOC] rk7srv.INI в указанной директории."""
+    ini_file = os.path.join(ini_dir, "rk7srv.INI")
+    if not os.path.isfile(ini_file):
+        return None
+    try:
+        try:
+            with open(ini_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            with open(ini_file, 'r', encoding='cp1251') as f:
+                lines = f.readlines()
+        in_tcpsoc = False
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r'^\[TCPSOC\]', stripped, re.IGNORECASE):
+                in_tcpsoc = True
+                continue
+            if in_tcpsoc:
+                if stripped.startswith('['):
+                    break
+                m = re.match(r'^\s*PORT\s*=\s*(\d+)', stripped, re.IGNORECASE)
+                if m:
+                    return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def _get_process_by_name(name: str) -> list[tuple[psutil.Process, str]]:
+    """Возвращает список (process, exe_dir) для всех процессов с данным именем."""
+    results = []
+    try:
+        result = subprocess.run(
+            ['tasklist', '/FI', f'IMAGENAME eq {name}', '/FO', 'CSV'],
+            capture_output=True, text=True, timeout=2
+        )
+        if result.returncode == 0 and name.lower() in result.stdout.lower():
+            for line in result.stdout.strip().split('\n'):
+                if name.lower() not in line.lower():
+                    continue
+                try:
+                    parts = line.split(',')
+                    pid_str = parts[1].strip('"')
+                    pid = int(pid_str)
+                    proc = psutil.Process(pid)
+                    exe_dir = os.path.normpath(os.path.dirname(proc.exe())).lower()
+                    results.append((proc, exe_dir))
+                except (ValueError, IndexError, psutil.NoSuchProcess):
+                    pass
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    for proc in psutil.process_iter(['pid', 'name']):
+        if proc.info.get('name', '').lower() != name.lower():
+            continue
+        try:
+            exe_dir = os.path.normpath(os.path.dirname(proc.exe())).lower()
+            if not any(p.pid == proc.pid for p, _ in results):
+                results.append((proc, exe_dir))
+        except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+            continue
+    return results
+
+
+def _get_port_info(ports: list[int]) -> str:
+    """Возвращает строку с информацией о том, какие процессы слушают на данных портах."""
+    if not ports:
+        return ""
+    info_parts = []
+    for port in ports:
+        proc_names = set()
+        try:
+            for conn in psutil.net_connections(kind='inet'):
+                if conn.laddr.port == port and conn.status == 'LISTEN' and conn.pid:
+                    try:
+                        p = psutil.Process(conn.pid)
+                        proc_names.add(f"{p.name()} (PID {conn.pid})")
+                    except psutil.NoSuchProcess:
+                        pass
+        except (psutil.AccessDenied, OSError):
+            pass
+        if proc_names:
+            info_parts.append(f"  {port}: {', '.join(proc_names)}")
+        else:
+            info_parts.append(f"  {port}: (неизвестно)")
+    return "\n".join(info_parts)
+
+
+def _get_rk7man_port_info(pid: int) -> str:
+    """Возвращает информацию о портах, к которым подключён процесс."""
+    connected = []
+    try:
+        for conn in psutil.net_connections(kind='inet'):
+            if conn.pid == pid and conn.status == 'ESTABLISHED' and conn.raddr:
+                port = conn.raddr.port
+                proc_info = ""
+                try:
+                    for c in psutil.net_connections(kind='inet'):
+                        if c.laddr.port == port and c.status == 'LISTEN' and c.pid:
+                            p = psutil.Process(c.pid)
+                            proc_info = f" ({p.name()} PID {c.pid})"
+                            break
+                except (psutil.AccessDenied, OSError, psutil.NoSuchProcess):
+                    pass
+                connected.append(f"  {port}: подключён{proc_info}")
+    except (psutil.AccessDenied, OSError):
+        pass
+    return "\n".join(connected) if connected else "  (нет активных подключений)"
+
+
+def kill_refsrv_and_rk7man():
+    """Комбинированное закрытие refsrv + rk7man: если оба из текущей директории —
+    сразу закрывает, иначе показывает окно с информацией о всех процессах."""
+    ini_path_norm = os.path.normpath(ini_path).lower()
+
+    refsrv_procs = _get_process_by_name('refsrv.exe')
+    rk7man_procs = _get_process_by_name('rk7man.exe')
+
+    refsrv_same = [p for p, d in refsrv_procs if d == ini_path_norm]
+    refsrv_other = [(p, d) for p, d in refsrv_procs if d != ini_path_norm]
+    rk7man_same = [p for p, d in rk7man_procs if d == ini_path_norm]
+    rk7man_other = [(p, d) for p, d in rk7man_procs if d != ini_path_norm]
+
+    # Если оба из той же директории — сразу закрываем без запроса
+    if refsrv_same and rk7man_same:
+        refsrv_same[0].terminate()
+        rk7man_same[0].terminate()
+        return
+
+    # Если хотя бы один из другой директории или не запущен — показываем информацию
+    msg_lines = []
+
+    if refsrv_same:
+        msg_lines.append("✓ refsrv.exe (текущая директория)")
+    elif refsrv_other:
+        proc, exe_dir = refsrv_other[0]
+        ports = _get_process_listening_ports(proc.pid)
+        if ports:
+            port_info = _get_port_info(ports)
+            msg_lines.append(f"⚠ refsrv.exe ({exe_dir}):\n{port_info}")
+        else:
+            ini_port = _read_port_from_ini(exe_dir)
+            msg_lines.append(f"⚠ refsrv.exe ({exe_dir})\n  Порт из INI: {ini_port or 'не найден'}")
+    else:
+        msg_lines.append("✗ refsrv.exe (не запущен)")
+
+    msg_lines.append("")
+
+    if rk7man_same:
+        msg_lines.append("✓ rk7man.exe (текущая директория)")
+    elif rk7man_other:
+        proc, exe_dir = rk7man_other[0]
+        port_info = _get_rk7man_port_info(proc.pid)
+        msg_lines.append(f"⚠ rk7man.exe ({exe_dir}):\n{port_info}")
+    else:
+        msg_lines.append("✗ rk7man.exe (не запущен)")
+
+    msg_lines.append("")
+    msg_lines.append("Закрыть запущенные процессы?")
+
+    answer = centered_askyesno("Закрыть refsrv + rk7man", "\n".join(msg_lines))
+    if not answer:
+        return
+
+    # Закрываем все найденные процессы
+    for proc in refsrv_procs:
+        try:
+            proc.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    for proc in rk7man_procs:
+        try:
+            proc.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+
+def kill_refsrv_process():
+    """Закрывает refsrv.exe: если запущен — спрашивает и закрывает,
+    если не запущен из текущего ini_path — показывает порт и предлагает закрыть."""
+    ini_path_norm = os.path.normpath(ini_path).lower()
+    procs = _get_process_by_name('refsrv.exe')
+
+    same_dir = [(p, d) for p, d in procs if d == ini_path_norm]
+    other_dir = [(p, d) for p, d in procs if d != ini_path_norm]
+
+    if same_dir:
+        same_dir[0][0].terminate()
+        return
+
+    if other_dir:
+        proc, exe_dir = other_dir[0]
+        ports = _get_process_listening_ports(proc.pid)
+        if ports:
+            port_info = _get_port_info(ports)
+            msg = f"refsrv.exe запущен:\n{port_info}\n({exe_dir})\n\nЗакрыть его?"
+        else:
+            ini_port = _read_port_from_ini(exe_dir)
+            msg = f"refsrv.exe запущен ({exe_dir})\nПорт из INI: {ini_port or 'не найден'}\nЗакрыть его?"
+        answer = centered_askyesno("Закрыть refsrv.exe", msg)
+        if answer:
+            proc.terminate()
+        return
+
     for proc in psutil.process_iter(['pid', 'name']):
         try:
-            if proc.info['name'].lower() == "rk7man.exe":
+            if proc.info['name'].lower() == "refsrv.exe":
                 proc.terminate()
                 return
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
-def kill_refsrv_process():
+
+def kill_rk7man_process():
+    """Закрывает rk7man.exe: если запущен — спрашивает и закрывает,
+    если не запущен из текущего ini_path — показывает, к какому порту подключён."""
+    ini_path_norm = os.path.normpath(ini_path).lower()
+    procs = _get_process_by_name('rk7man.exe')
+
+    same_dir = [(p, d) for p, d in procs if d == ini_path_norm]
+    other_dir = [(p, d) for p, d in procs if d != ini_path_norm]
+
+    if same_dir:
+        same_dir[0][0].terminate()
+        return
+
+    if other_dir:
+        proc, exe_dir = other_dir[0]
+        connected_ports = []
+        try:
+            for conn in psutil.net_connections(kind='inet'):
+                if conn.pid == proc.pid and conn.status == 'ESTABLISHED' and conn.raddr:
+                    connected_ports.append(str(conn.raddr.port))
+        except (psutil.AccessDenied, OSError):
+            pass
+
+        if connected_ports:
+            port_str = ", ".join(connected_ports)
+            msg = f"rk7man.exe подключён к порту: {port_str}\n({exe_dir})\nЗакрыть его?"
+        else:
+            msg = f"rk7man.exe запущен ({exe_dir})\nЗакрыть его?"
+        answer = centered_askyesno("Закрыть rk7man.exe", msg)
+        if answer:
+            proc.terminate()
+        return
+
     for proc in psutil.process_iter(['pid', 'name']):
         try:
-            if proc.info['name'].lower() == "refsrv.exe":
+            if proc.info['name'].lower() == "rk7man.exe":
                 proc.terminate()
                 return
         except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -3389,7 +3784,7 @@ tk.Button(frame_refsrv_rk7man, text="📄", command=lambda: open_multiple_logs("
 
 
 # Кнопка Close для Refsrv + RK7man
-tk.Button(frame_refsrv_rk7man, text="❌", command=lambda: kill_refsrv_process() or kill_rk7man_process(), width=2)\
+tk.Button(frame_refsrv_rk7man, text="❌", command=kill_refsrv_and_rk7man, width=2)\
     .pack(side="left")
 
 # Создаем фрейм для MidServ + WinCash
@@ -3413,7 +3808,7 @@ frame_refsrv = tk.Frame(col1)
 frame_refsrv.pack(anchor="w", pady=2)
 
 # Кнопка Refsrv
-tk.Button(frame_refsrv, text="Refsrv", command=lambda: run_or_restart_process("refsrv.exe"), width=15)\
+tk.Button(frame_refsrv, text="Refsrv", command=start_refsrv_only, width=15)\
     .pack(side="left")
 
 tk.Button(frame_refsrv, text="📄", command=partial(open_log_file, "refsrv.stk"), width=3)\
@@ -3428,7 +3823,7 @@ frame_rk7man = tk.Frame(col1)
 frame_rk7man.pack(anchor="w", pady=2)
 
 # Кнопка RK7man
-tk.Button(frame_rk7man, text="RK7man", command=run_rk7man, width=15)\
+tk.Button(frame_rk7man, text="RK7man", command=start_rk7man_only, width=15)\
     .pack(side="left")
 
 tk.Button(frame_rk7man, text="📄", command=partial(open_log_file, "rk7man.stk"), width=3)\
@@ -3444,7 +3839,7 @@ frame_midserv = tk.Frame(col2)
 frame_midserv.pack(anchor="w", pady=2)  # Размещаем фрейм с выравниванием по левой стороне
 
 # Кнопка MidServ
-tk.Button(frame_midserv, text="MidServ", command=lambda: run_or_restart_process("midserv.exe"), width=15)\
+tk.Button(frame_midserv, text="MidServ", command=start_midserv_only, width=15)\
     .pack(side="left")  # Кнопка расположена слева в фрейме
 
 tk.Button(frame_midserv, text="📄", command=partial(open_log_file, "midsrv.stk"), width=3)\
@@ -3459,7 +3854,7 @@ frame_win_cash = tk.Frame(col2)
 frame_win_cash.pack(anchor="w", pady=2)  # Размещаем фрейм с выравниванием по левой стороне
 
 # Кнопка WinCash
-tk.Button(frame_win_cash, text="WinCash", command=run_wincash_bat, width=15)\
+tk.Button(frame_win_cash, text="WinCash", command=start_wincash_only, width=15)\
     .pack(side="left")  # Кнопка расположена слева в фрейме
 
 tk.Button(frame_win_cash, text="📄", command=partial(open_log_file, "cash.stk"), width=3)\
