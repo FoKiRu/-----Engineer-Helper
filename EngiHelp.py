@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.8.3.2"
+SCRIPT_VERSION = "v1.8.4.2"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -1555,13 +1555,7 @@ def change_rk_version():
     tk.Button(btn_frame, text="Перенести", command=on_confirm, width=12).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=select_win.destroy, width=12).pack(side="left", padx=5)
 
-    select_win.update_idletasks()
-    w = select_win.winfo_reqwidth()
-    h = select_win.winfo_reqheight()
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    select_win.geometry(f"{w}x{h}+{x}+{y}")
-    select_win.resizable(False, False)
+    _center_window(select_win)
 
     select_win.focus_force()
     select_win.deiconify()
@@ -1876,13 +1870,7 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
     tk.Button(btn_frame, text="Выбрать", command=on_select, width=12).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=on_cancel, width=12).pack(side="left", padx=5)
 
-    select_win.update_idletasks()
-    w = select_win.winfo_reqwidth()
-    h = select_win.winfo_reqheight()
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    select_win.geometry(f"{w}x{h}+{x}+{y}")
-    select_win.resizable(False, False)
+    _center_window(select_win)
 
     select_win.focus_force()
     select_win.deiconify()
@@ -2894,17 +2882,11 @@ def confirm_midbase_deletion(protected_files, base_path):
     tk.Button(btn_frame, text="Очистить", command=on_delete).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=win.destroy).pack(side="left", padx=5)
 
-    win.update_idletasks()
-    w = win.winfo_reqwidth()
-    h = win.winfo_reqheight()
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    win.geometry(f"{w}x{h}+{x}+{y}")
-    win.resizable(False, False)
+    _center_window(win)
 
     win.focus_force()
     win.deiconify()
-    
+
 def confirm_deletion_with_options(protected_files, base_path, callback_with_backup, callback_without_backup):
     win = tk.Toplevel(root)
     win.withdraw()
@@ -2941,13 +2923,7 @@ def confirm_deletion_with_options(protected_files, base_path, callback_with_back
     tk.Button(btn_frame, text="Очистить", command=on_delete).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=win.destroy).pack(side="left", padx=5)
 
-    win.update_idletasks()
-    w = win.winfo_reqwidth()
-    h = win.winfo_reqheight()
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    win.geometry(f"{w}x{h}+{x}+{y}")
-    win.resizable(False, False)
+    _center_window(win)
 
     win.focus_force()
     win.deiconify()
@@ -3000,13 +2976,7 @@ def proceed_with_backup_and_deletion(base_path, protected_files):
     frame.pack(fill="both", expand=True)
     tk.Label(frame, text="Создаётся резервная копия папки base...").pack(padx=15, pady=15)
 
-    copying_win.update_idletasks()
-    w = copying_win.winfo_reqwidth()
-    h = copying_win.winfo_reqheight()
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    copying_win.geometry(f"{w}x{h}+{x}+{y}")
-    copying_win.resizable(False, False)
+    _center_window(copying_win)
 
     copying_win.deiconify()
     copying_win.update()
@@ -3052,6 +3022,32 @@ def proceed_with_deletion(protected_files, base_path, backup_path=None):
         centered_info("Удаление файлов и папок", "Нет элементов для удаления или все элементы защищены.")
 
 
+# Максимальная ширина всплывающих окон: если текст в Label не влезает,
+# он переносится на новую строку (wraplength), а не растягивает окно.
+CENTERED_WINDOW_MAX_WIDTH = 500
+
+def _wrap_labels(widget, wraplength):
+    if isinstance(widget, tk.Label):
+        widget.config(wraplength=wraplength)
+    for child in widget.winfo_children():
+        _wrap_labels(child, wraplength)
+
+def _center_window(win, max_width=CENTERED_WINDOW_MAX_WIDTH, min_width=280):
+    """Центрирует Toplevel-окно относительно root с ограничением максимальной ширины."""
+    win.update_idletasks()
+    w = win.winfo_reqwidth()
+    if w > max_width:
+        _wrap_labels(win, max_width - 40)
+        win.update_idletasks()
+        w = win.winfo_reqwidth()
+    w = max(min(w, max_width), min_width)
+    h = win.winfo_reqheight()
+    x = root.winfo_x() + (root.winfo_width() - w) // 2
+    y = root.winfo_y() + (root.winfo_height() - h) // 2
+    win.geometry(f"{w}x{h}+{x}+{y}")
+    win.resizable(False, False)
+
+
 def centered_info(title, message):
     """Центрированное информационное окно."""
     win = tk.Toplevel(root)
@@ -3070,13 +3066,7 @@ def centered_info(title, message):
     tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
     tk.Button(frame, text="OK", command=win.destroy, width=12).pack(pady=(0, 15))
 
-    win.update_idletasks()
-    w = max(win.winfo_reqwidth(), 280)
-    h = win.winfo_reqheight()
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    win.geometry(f"{w}x{h}+{x}+{y}")
-    win.resizable(False, False)
+    _center_window(win)
 
     win.focus_force()
     win.deiconify()
@@ -3100,13 +3090,7 @@ def centered_warning(title, message):
     tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
     tk.Button(frame, text="OK", command=win.destroy, width=12).pack(pady=(0, 15))
 
-    win.update_idletasks()
-    w = max(win.winfo_reqwidth(), 280)
-    h = win.winfo_reqheight()
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    win.geometry(f"{w}x{h}+{x}+{y}")
-    win.resizable(False, False)
+    _center_window(win)
 
     win.focus_force()
     win.deiconify()
@@ -3130,13 +3114,7 @@ def centered_error(title, message):
     tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
     tk.Button(frame, text="OK", command=win.destroy, width=12).pack(pady=(0, 15))
 
-    win.update_idletasks()
-    w = max(win.winfo_reqwidth(), 280)
-    h = win.winfo_reqheight()
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    win.geometry(f"{w}x{h}+{x}+{y}")
-    win.resizable(False, False)
+    _center_window(win)
 
     win.focus_force()
     win.deiconify()
@@ -3174,13 +3152,7 @@ def centered_askyesno(title, message):
     tk.Button(btn_frame, text="Да", command=on_yes, width=10).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Нет", command=on_no, width=10).pack(side="left", padx=5)
 
-    win.update_idletasks()
-    w = max(win.winfo_reqwidth(), 280)
-    h = win.winfo_reqheight()
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    win.geometry(f"{w}x{h}+{x}+{y}")
-    win.resizable(False, False)
+    _center_window(win)
 
     win.focus_force()
     win.deiconify()
@@ -3220,13 +3192,7 @@ def centered_askokcancel(title, message):
     tk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=on_cancel, width=10).pack(side="left", padx=5)
 
-    win.update_idletasks()
-    w = max(win.winfo_reqwidth(), 280)
-    h = win.winfo_reqheight()
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    win.geometry(f"{w}x{h}+{x}+{y}")
-    win.resizable(False, False)
+    _center_window(win)
 
     win.focus_force()
     win.deiconify()
