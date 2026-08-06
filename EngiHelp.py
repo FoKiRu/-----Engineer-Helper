@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.8.3.1"
+SCRIPT_VERSION = "v1.8.3.2"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -2124,6 +2124,15 @@ _task_selection_initialized = False  # Флаг для пропуска перв
 def _on_task_id_change(*_):
     """Callback для trace_add — вызывается при любом изменении task_id_var."""
     global _prev_task_id, _task_selection_initialized
+
+    # Защита от дурака: если в поле вставили номер задачи с пробелами
+    # (например, скопировали "123456 " из другого источника) — обрезаем их.
+    current_value = task_id_var.get()
+    stripped_value = current_value.strip()
+    if stripped_value != current_value:
+        task_id_var.set(stripped_value)
+        return  # trace сработает повторно уже с очищенным значением
+
     # Пропускаем первый вызов при инициализации
     if not _task_selection_initialized:
         _task_selection_initialized = True
@@ -3610,6 +3619,10 @@ def kill_refsrv_and_rk7man():
     # Если хотя бы один из другой директории или не запущен — показываем информацию
     msg_lines = []
 
+    # Собираем процессы для закрытия
+    to_close = {'refsrv': refsrv_same + [p for p, _ in refsrv_other],
+                'rk7man': rk7man_same + [p for p, _ in rk7man_other]}
+
     if refsrv_same:
         msg_lines.append("✓ refsrv.exe (текущая директория)")
     elif refsrv_other:
@@ -3642,15 +3655,15 @@ def kill_refsrv_and_rk7man():
     if not answer:
         return
 
-    # Закрываем все найденные процессы
-    for proc in refsrv_procs:
+    # Закрываем только запущенные процессы
+    for proc in to_close['refsrv']:
         try:
-            proc.terminate()
+            proc.kill()
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
-    for proc in rk7man_procs:
+    for proc in to_close['rk7man']:
         try:
-            proc.terminate()
+            proc.kill()
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
@@ -3665,7 +3678,7 @@ def kill_refsrv_process():
     other_dir = [(p, d) for p, d in procs if d != ini_path_norm]
 
     if same_dir:
-        same_dir[0][0].terminate()
+        same_dir[0][0].kill()
         return
 
     if other_dir:
@@ -3679,13 +3692,13 @@ def kill_refsrv_process():
             msg = f"refsrv.exe запущен ({exe_dir})\nПорт из INI: {ini_port or 'не найден'}\nЗакрыть его?"
         answer = centered_askyesno("Закрыть refsrv.exe", msg)
         if answer:
-            proc.terminate()
+            proc.kill()
         return
 
     for proc in psutil.process_iter(['pid', 'name']):
         try:
             if proc.info['name'].lower() == "refsrv.exe":
-                proc.terminate()
+                proc.kill()
                 return
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
@@ -3701,8 +3714,25 @@ def kill_rk7man_process():
     other_dir = [(p, d) for p, d in procs if d != ini_path_norm]
 
     if same_dir:
-        same_dir[0][0].terminate()
+        same_dir[0][0].kill()
         return
+
+    if other_dir:
+        proc, exe_dir = other_dir[0]
+        port_info = _get_rk7man_port_info(proc.pid)
+        msg = f"rk7man.exe запущен:\n{port_info}\n({exe_dir})\n\nЗакрыть его?"
+        answer = centered_askyesno("Закрыть rk7man.exe", msg)
+        if answer:
+            proc.kill()
+        return
+
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            if proc.info['name'].lower() == "rk7man.exe":
+                proc.kill()
+                return
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
 
     if other_dir:
         proc, exe_dir = other_dir[0]
