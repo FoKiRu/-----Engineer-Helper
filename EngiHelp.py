@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.8.4.2"
+SCRIPT_VERSION = "v1.8.5.4"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -56,19 +56,19 @@ FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
 def load_data():
     """Загружает данные из единого JSON-файла."""
     if not os.path.exists(DATA_FILE):
-        return {"settings": {"auto_update": True, "recent_paths": []}, "tasks": {}}
+        return {"settings": {"auto_update": True, "task_from_version": False, "recent_paths": []}, "tasks": {}}
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             # Убедимся, что все ключи на месте
             if "settings" not in data:
-                data["settings"] = {"auto_update": True, "recent_paths": []}
+                data["settings"] = {"auto_update": True, "task_from_version": False, "recent_paths": []}
             if "tasks" not in data:
                 data["tasks"] = {}
             return data
     except (json.JSONDecodeError, IOError):
         # В случае ошибки возвращаем пустую структуру
-        return {"settings": {"auto_update": True, "recent_paths": []}, "tasks": {}}
+        return {"settings": {"auto_update": True, "task_from_version": False, "recent_paths": []}, "tasks": {}}
 
 def save_data(data):
     """Сохраняет данные в единый JSON-файл."""
@@ -87,7 +87,7 @@ def migrate_old_configs():
         return # Новый файл уже есть, миграция не нужна
 
     print("Миграция старых конфигурационных файлов...")
-    new_data = {"settings": {"auto_update": True, "recent_paths": []}, "tasks": {}}
+    new_data = {"settings": {"auto_update": True, "task_from_version": False, "recent_paths": []}, "tasks": {}}
     migrated = False
 
     # Миграция из EngiHelp_config.json
@@ -225,7 +225,8 @@ def load_settings_and_paths():
     settings = data.get("settings", {})
     paths = settings.get("recent_paths", [])
     auto_update = settings.get("auto_update", True)
-    return paths, auto_update
+    task_from_version = settings.get("task_from_version", False)
+    return paths, auto_update, task_from_version
 
 
 def save_settings_and_path(new_path):
@@ -239,9 +240,12 @@ def save_settings_and_path(new_path):
     paths.insert(0, new_path)
     data["settings"]["recent_paths"] = paths[:3] # Оставляем только 3 последних
 
-    # Обновляем флаг автообновления
-    data["settings"]["auto_update"] = auto_update_var.get()
-    
+    # Обновляем флаги настроек
+    if 'auto_update_var' in globals():
+        data["settings"]["auto_update"] = auto_update_var.get()
+    if 'task_from_version_var' in globals():
+        data["settings"]["task_from_version"] = task_from_version_var.get()
+
     save_data(data)
     
     # Обновляем выпадающий список в интерфейсе
@@ -261,6 +265,32 @@ def find_latest_task_for_path(target_path):
             return task_id  # Нашли, возвращаем ID
             
     return None  # Для этого пути задач не найдено
+
+def find_tasks_for_path(target_path):
+    """
+    Находит ВСЕ сохранённые ID задач, привязанные к указанному пути версии.
+    Учитывает как основной ini_path задачи, так и пути из её versions.
+    Порядок сохраняется как в файле данных (самая свежая задача — первая).
+    """
+    if not target_path:
+        return []
+
+    def _norm(p):
+        return os.path.normpath(p).replace("\\", "/").lower() if p else ""
+
+    target_norm = _norm(target_path)
+    data = load_data()
+    tasks = data.get("tasks", {})
+
+    found = []
+    for task_id, task_info in tasks.items():
+        paths = {_norm(task_info.get("ini_path"))}
+        for ver_info in task_info.get("versions", {}).values():
+            paths.add(_norm(ver_info.get("ini_path")))
+        if target_norm in paths:
+            found.append(task_id)
+
+    return found
 
 def get_current_task_base_path(task_id):
     """Возвращает путь к папке base для указанного ID задачи."""
@@ -294,9 +324,11 @@ def extract_task_id_from_rk7srv_ini(ini_path):
     return None
 
 # ======================= Определение путей и начальных переменных =======================
-ini_paths, auto_update_enabled = load_settings_and_paths()
+ini_paths, auto_update_enabled, task_from_version_enabled = load_settings_and_paths()
 ini_path = ini_paths[0] if ini_paths else ""
 auto_update_var = tk.BooleanVar(value=auto_update_enabled)
+# Флаг "Выбор задачи из выбора версии": при смене версии RK предлагать выбрать задачу
+task_from_version_var = tk.BooleanVar(value=task_from_version_enabled)
 INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
 
 # Создаём task_id_var ЗДЕСЬ, до первого использования
@@ -315,6 +347,12 @@ else:
 
 # Инициализируем _prev_task_id для корректного сохранения при смене задачи
 _prev_task_id = task_id_var.get().strip()
+
+# Версия RK, уже выбранная пользователем при выборе версии из списка путей.
+# Если задана — on_task_selected не показывает диалог выбора версии,
+# а сразу применяет эту версию (иначе получилась бы тавтология:
+# выбрали версию -> выбрали задачу -> опять выбираем версию).
+_forced_version = None
 
 # Открываем номер задачи в SD
 def open_task_in_sd():
@@ -1280,7 +1318,12 @@ def apply_path_silent():
         save_settings_and_path(ini_path)
 
 def on_task_selected(event):
-    global _prev_task_id
+    global _prev_task_id, _forced_version
+
+    # Версия, уже выбранная пользователем на шаге выбора версии.
+    # Забираем и сразу сбрасываем — она действует только на один вызов.
+    forced_version = _forced_version
+    _forced_version = None
 
     # Запоминаем старую задачу ДО обновления
     old_task_id = _prev_task_id
@@ -1308,6 +1351,12 @@ def on_task_selected(event):
     # === ПРОВЕРКА НА НЕСКОЛЬКО ВЕРСИЙ ===
     versions = task_info.get("versions", {})
     if len(versions) > 1:
+        # Версия уже выбрана пользователем на предыдущем шаге — применяем её
+        # без повторного диалога (иначе: выбрали версию -> задачу -> опять версию).
+        if forced_version and forced_version in versions:
+            _prev_task_id = selected_task_id
+            apply_task_version(selected_task_id, forced_version)
+            return
         # Не обновляем _prev_task_id — это сделает диалог при подтверждении
         show_version_selection_dialog(selected_task_id, task_info, versions, old_task_id)
         return
@@ -1954,6 +2003,104 @@ def apply_task_version(task_id, selected_version):
 
     on_check()
 
+
+def show_task_selection_dialog(version_path, task_list, fallback_task_id=None):
+    """
+    Диалог выбора задачи при выборе версии RK.
+    Зеркало show_version_selection_dialog: там к задаче предлагаются версии,
+    здесь к версии предлагаются задачи.
+    Работает при включённом флаге "Выбор задачи из выбора версии".
+    """
+    select_win = tk.Toplevel(root)
+    select_win.withdraw()
+    select_win.title("Выбор задачи")
+
+    if icon_path:
+        select_win.iconbitmap(icon_path)
+
+    # version_key — точный ключ версии (как в task_info["versions"]), может быть None.
+    # version_label — то, что показываем пользователю.
+    version_key = extract_rk_version_from_path(version_path)
+    version_label = version_key or os.path.basename(version_path)
+    current_task = task_id_var.get().strip()
+
+    select_win.transient(root)
+    select_win.grab_set()
+
+    frame = tk.Frame(select_win)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(frame, text=(
+        f"Версия {version_label} имеет несколько задач.\n"
+        f"Выберите задачу для работы:"
+    ), justify="center").pack(padx=10, pady=(10, 5))
+
+    task_var_local = tk.StringVar()
+    if current_task in task_list:
+        task_var_local.set(current_task)
+    elif task_list:
+        task_var_local.set(task_list[0])
+
+    center_container = tk.Frame(frame)
+    center_container.pack(pady=5, expand=True)
+
+    radio_frame = tk.Frame(center_container)
+    radio_frame.pack()
+
+    for tid in task_list:
+        label_text = tid
+        if tid == current_task:
+            label_text += "  ◀ текущая"
+
+        tk.Radiobutton(
+            radio_frame,
+            text=label_text,
+            variable=task_var_local,
+            value=tid,
+            anchor="w",
+            font=("TkDefaultFont", 9, "bold" if tid == current_task else "normal")
+        ).pack(anchor="w", pady=2, fill="x")
+
+    def _load_task(selected_tid):
+        """Применяет задачу: через trace, либо напрямую если значение не изменилось."""
+        global _forced_version
+        # Версия уже выбрана пользователем на предыдущем шаге — фиксируем её,
+        # чтобы on_task_selected не спрашивал версию повторно.
+        _forced_version = version_key
+
+        task_id_combobox['values'] = load_task_ids()
+        if task_id_var.get().strip() == selected_tid:
+            # trace не сработает — применяем настройки напрямую
+            on_task_selected(None)
+        else:
+            task_id_var.set(selected_tid)
+
+    def on_select():
+        selected_tid = task_var_local.get()
+        if not selected_tid:
+            return
+        select_win.destroy()
+        _load_task(selected_tid)
+
+    def on_cancel():
+        select_win.destroy()
+        # Отмена — грузим параметры из INI-файлов выбранной версии без привязки к задаче
+        if fallback_task_id:
+            _load_task(fallback_task_id)
+        else:
+            load_wincash_params()
+            on_check()
+
+    btn_frame = tk.Frame(frame)
+    btn_frame.pack(pady=10)
+    tk.Button(btn_frame, text="Выбрать", command=on_select, width=12).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Отмена", command=on_cancel, width=12).pack(side="left", padx=5)
+
+    _center_window(select_win)
+
+    select_win.focus_force()
+    select_win.deiconify()
+
 import keyboard
 
 # ======================= Поддержка копирования при русской раскладке =======================
@@ -2593,7 +2740,7 @@ tk.Button(
 path_frame = tk.Frame(settings_tab)
 path_frame.pack(fill="x", padx=10, pady=(5, 0))
 path_var = tk.StringVar()
-ini_paths, auto_update_enabled = load_settings_and_paths()
+ini_paths, auto_update_enabled, task_from_version_enabled = load_settings_and_paths()
 if ini_paths:
     path_var.set(ini_paths[0])
 path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
@@ -2737,11 +2884,25 @@ def apply_path(event=None, update_task=True): # Добавлен парамет�
     # --- ЛОГИКА АВТОЗАГРУЗКИ ЗАДАЧИ ---
     if update_task: # Выполняем только если разрешено
         latest_task_id = find_latest_task_for_path(ini_path)
-        
+
+        # === ФЛАГ "Выбор задачи из выбора версии" ===
+        # Если включён и для версии есть несколько задач — предлагаем выбрать задачу
+        if task_from_version_var.get():
+            path_tasks = find_tasks_for_path(ini_path)
+            if len(path_tasks) > 1:
+                task_id_combobox['values'] = load_task_ids()
+                show_task_selection_dialog(ini_path, path_tasks, latest_task_id)
+                return
+
         if latest_task_id:
             print(f"Найден последний ID задачи ({latest_task_id}) для пути {ini_path}. Применяем настройки.")
-            task_id_var.set(latest_task_id)
-            on_task_selected(None) 
+            # ВАЖНО: task_id_var.set() сам вызывает on_task_selected через trace.
+            # Явный вызов нужен только если значение не изменилось (trace не сработает),
+            # иначе настройки применятся дважды (и диалог выбора версии откроется 2 раза).
+            if task_id_var.get().strip() == latest_task_id:
+                on_task_selected(None)
+            else:
+                task_id_var.set(latest_task_id)
         else:
             print(f"Для пути {ini_path} сохраненных задач не найдено. Загружаем из INI-файлов.")
             task_id_var.set("") 
@@ -4306,6 +4467,43 @@ def check_for_updates(silent=False):
         if not silent:
             centered_error("Ошибка", f"Не удалось обновить:\n{e}")
 
+# ======================= Вкладка "Настройки" =======================
+prefs_tab = tk.Frame(notebook)
+notebook.add(prefs_tab, text="Настройки")
+
+def save_prefs_flags(*_):
+    """Сохраняет флаги настроек в файл данных при их переключении."""
+    data = load_data()
+    data["settings"]["auto_update"] = auto_update_var.get()
+    data["settings"]["task_from_version"] = task_from_version_var.get()
+    save_data(data)
+
+tk.Checkbutton(
+    prefs_tab,
+    text="Проверять обновления при запуске",
+    variable=auto_update_var,
+    command=save_prefs_flags
+).pack(padx=10, pady=(10, 5), anchor="w")
+
+tk.Checkbutton(
+    prefs_tab,
+    text="Выбор задачи из выбора версии",
+    variable=task_from_version_var,
+    command=save_prefs_flags
+).pack(padx=10, pady=(0, 2), anchor="w")
+
+desc_label = tk.Label(
+    prefs_tab,
+    text=("При выборе версии RK будет предложено выбрать задачу из этой версии. "
+          "Если флаг выключен — применяется последняя используемая задача."),
+    justify="left",
+    fg="gray40",
+    font=("TkDefaultFont", 8),
+    wraplength=350,      # ширина в пикселях, под окно
+    anchor="w"
+)
+desc_label.pack(padx=(30, 10), pady=(0, 10), anchor="w", fill="x")
+
 # Info tab
 info_tab = tk.Frame(notebook)
 notebook.add(info_tab, text="О программе")
@@ -4314,12 +4512,9 @@ info_label = tk.Label(info_tab, text=f"{DESCRIPTION}\n{AUTHOR}\n{EMAIL}\n{SCRIPT
 info_label.pack(padx=10, pady=10, anchor="nw", fill="both", expand=True)
 info_label.bind('<Configure>', lambda e: info_label.config(wraplength=e.width - 20))
 
-tk.Checkbutton(info_tab, text="Проверять обновления при запуске", variable=auto_update_var)\
-    .pack(padx=10, pady=(10, 5), anchor="w")
-
-# Обёртка для ручной проверки через кнопку
+# Обёртка для ручной проверки через кнопку (справа)
 tk.Button(info_tab, text="Проверить обновление", command=lambda: check_for_updates(silent=False))\
-    .pack(padx=10, pady=(0, 10), anchor="w")
+    .pack(padx=10, pady=(0, 10), anchor="e")
 
 def update_every_1_seconds():
     # Обновляем информацию о WinCash и RKEEPER по приоритету
