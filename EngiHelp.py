@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.0.1"
+SCRIPT_VERSION = "v1.9.1.1"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -198,10 +198,10 @@ if icon_path:
    root.iconbitmap(icon_path)  # Применяем иконку к главному окну
 
 # Размеры главного окна
-WINDOW_WIDTH = 397
-WINDOW_HEIGHT = 430
-WINDOW_OFFSET_X = 230
-WINDOW_OFFSET_Y = 140
+WINDOW_WIDTH = 412
+WINDOW_HEIGHT = 510
+WINDOW_OFFSET_X = 223
+WINDOW_OFFSET_Y = 100   
 
 # Центрирование окна
 screen_width = root.winfo_screenwidth()
@@ -2181,9 +2181,13 @@ def on_closing():
     root.destroy()
 # ======================= КОНЕЦ ПОДДЕРЖКИ КОПИРОВАНИЯ =======================
 
+# Группа: путь к RK7 и задача
+path_task_frame = tk.LabelFrame(settings_tab, text="Путь и задача")
+path_task_frame.pack(padx=10, pady=(10, 0), fill="x")
+
 # Фрейм для метки, кнопки "Открыть" и поля для номера задачи
-label_and_open_frame = tk.Frame(settings_tab)
-label_and_open_frame.pack(fill="x", padx=9, pady=(10, 0), ipady=0)
+label_and_open_frame = tk.Frame(path_task_frame)
+label_and_open_frame.pack(fill="x", padx=5, pady=(5, 0), ipady=0)
 
 # Левая часть: метка "Путь к RK7:" и кнопка "Открыть"
 tk.Label(
@@ -2737,8 +2741,8 @@ tk.Button(
 ).grid(row=0, column=4, padx=(5, 0), sticky="w")
 
 # Выбор пути
-path_frame = tk.Frame(settings_tab)
-path_frame.pack(fill="x", padx=10, pady=(5, 0))
+path_frame = tk.Frame(path_task_frame)
+path_frame.pack(fill="x", padx=5, pady=(5, 5))
 path_var = tk.StringVar()
 ini_paths, auto_update_enabled, task_from_version_enabled = load_settings_and_paths()
 if ini_paths:
@@ -4031,8 +4035,11 @@ usesql_var = tk.IntVar(value=int(get_usesql_value()))
 usedbsync_var = tk.IntVar(value=int(detect_consensus_value()))
 port_var = tk.StringVar(value=get_port_value())
 
-flags_frame = tk.Frame(settings_tab)
-flags_frame.pack(padx=10, pady=(0, 5), fill="x")
+flags_lf = tk.LabelFrame(settings_tab, text="Параметры INI")
+flags_lf.pack(padx=10, pady=(0, 5), fill="x")
+
+flags_frame = tk.Frame(flags_lf)
+flags_frame.pack(padx=5, pady=5, fill="x")
 
 usesql_cb = tk.Checkbutton(
     flags_frame,
@@ -4379,8 +4386,11 @@ def show_product_folders():
         centered_error("Ошибка", f"Не удалось получить список папок:\n{e}")
 
 # ======================= Панель с кнопками "Проверить файлы", "Показать папки" и "Clear Base" =======================
-check_folder_frame = tk.Frame(settings_tab)
-check_folder_frame.pack(padx=10, pady=10, anchor="w", fill="x")
+task_actions_lf = tk.LabelFrame(settings_tab, text="Управление задачей")
+task_actions_lf.pack(padx=10, pady=(0, 10), fill="x")
+
+check_folder_frame = tk.Frame(task_actions_lf)
+check_folder_frame.pack(padx=5, pady=5, anchor="w", fill="x")
 
 # Первый ряд: "Открыть задачу в SD", "Clear MIDBASE", "Clear Base"
 check_btn = tk.Button(check_folder_frame, text="Открыть задачу в SD", command=open_task_in_sd)
