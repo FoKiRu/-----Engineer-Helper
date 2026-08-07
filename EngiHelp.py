@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.8.5.4"
+SCRIPT_VERSION = "v1.9.0.1"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -2867,8 +2867,8 @@ def update_ini_info_by_priority():
     # print("[DEBUG] Используем", "wincash.ini" if wincash_mtime >= rkeeper_mtime else "RKEEPER.INI")
 
 def apply_path(event=None, update_task=True): # Добавлен параметр update_task
-    global ini_path, INI_FILE_USESQL
-    
+    global ini_path, INI_FILE_USESQL, _forced_version
+
     new_path = path_var.get()
     if not os.path.isdir(new_path):
         centered_error("Ошибка", f"Путь не найден:\n{new_path}")
@@ -2896,6 +2896,10 @@ def apply_path(event=None, update_task=True): # Добавлен парамет�
 
         if latest_task_id:
             print(f"Найден последний ID задачи ({latest_task_id}) для пути {ini_path}. Применяем настройки.")
+            # Версия уже однозначно определена выбранной директорией — фиксируем её,
+            # чтобы on_task_selected не спрашивал версию повторно, даже если у задачи
+            # есть несколько версий (директория и есть выбор версии).
+            _forced_version = extract_rk_version_from_path(ini_path)
             # ВАЖНО: task_id_var.set() сам вызывает on_task_selected через trace.
             # Явный вызов нужен только если значение не изменилось (trace не сработает),
             # иначе настройки применятся дважды (и диалог выбора версии откроется 2 раза).
