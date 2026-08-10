@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.1.2"
+SCRIPT_VERSION = "v1.9.2.2"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -3689,6 +3689,25 @@ def _get_process_by_name(name: str) -> list[tuple[psutil.Process, str]]:
     return results
 
 
+def _get_task_label_for_dir(exe_dir: str) -> str | None:
+    """Определяет ID задачи и версию RK для процесса, запущенного из exe_dir
+    (на основе rk7srv.INI в этой папке). Возвращает строку вида
+    'задача 197034, версия 7.0.0.1234' или None, если не удалось определить."""
+    if not exe_dir:
+        return None
+    ini_file = os.path.join(exe_dir, "rk7srv.INI")
+    task_id = extract_task_id_from_rk7srv_ini(ini_file)
+    version = extract_rk_version_from_path(exe_dir)
+    if not task_id and not version:
+        return None
+    parts = []
+    if task_id:
+        parts.append(f"задача {task_id}")
+    if version:
+        parts.append(f"версия {version}")
+    return ", ".join(parts)
+
+
 def _get_port_info(ports: list[int]) -> str:
     """Возвращает строку с информацией о том, какие процессы слушают на данных портах."""
     if not ports:
@@ -3765,13 +3784,15 @@ def kill_refsrv_and_rk7man():
         msg_lines.append("✓ refsrv.exe (текущая директория)")
     elif refsrv_other:
         proc, exe_dir = refsrv_other[0]
+        task_label = _get_task_label_for_dir(exe_dir)
+        task_suffix = f"\n  {task_label}" if task_label else ""
         ports = _get_process_listening_ports(proc.pid)
         if ports:
             port_info = _get_port_info(ports)
-            msg_lines.append(f"⚠ refsrv.exe ({exe_dir}):\n{port_info}")
+            msg_lines.append(f"⚠ refsrv.exe ({exe_dir}):\n{port_info}{task_suffix}")
         else:
             ini_port = _read_port_from_ini(exe_dir)
-            msg_lines.append(f"⚠ refsrv.exe ({exe_dir})\n  Порт из INI: {ini_port or 'не найден'}")
+            msg_lines.append(f"⚠ refsrv.exe ({exe_dir})\n  Порт из INI: {ini_port or 'не найден'}{task_suffix}")
     else:
         msg_lines.append("✗ refsrv.exe (не запущен)")
 
@@ -3821,13 +3842,15 @@ def kill_refsrv_process():
 
     if other_dir:
         proc, exe_dir = other_dir[0]
+        task_label = _get_task_label_for_dir(exe_dir)
+        task_suffix = f"\n{task_label}" if task_label else ""
         ports = _get_process_listening_ports(proc.pid)
         if ports:
             port_info = _get_port_info(ports)
-            msg = f"refsrv.exe запущен:\n{port_info}\n({exe_dir})\n\nЗакрыть его?"
+            msg = f"refsrv.exe запущен:\n{port_info}\n({exe_dir}){task_suffix}\n\nЗакрыть его?"
         else:
             ini_port = _read_port_from_ini(exe_dir)
-            msg = f"refsrv.exe запущен ({exe_dir})\nПорт из INI: {ini_port or 'не найден'}\nЗакрыть его?"
+            msg = f"refsrv.exe запущен ({exe_dir})\nПорт из INI: {ini_port or 'не найден'}{task_suffix}\nЗакрыть его?"
         answer = centered_askyesno("Закрыть refsrv.exe", msg)
         if answer:
             proc.kill()
