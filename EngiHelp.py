@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.1.1"
+SCRIPT_VERSION = "v1.9.1.2"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -1753,7 +1753,10 @@ def perform_version_change(task_id, current_version, target_version):
         if os.path.isfile(src): shutil.copy2(src, dst)
 
     update_rk7srv_ini(os.path.join(target_bin_win, "rk7srv.INI"), base_folder_name)
-    
+
+    # Создаём ярлыки для новой версии (указывают на target_bin_win)
+    create_task_shortcuts(target_task_folder, target_bin_win)
+
     path_var.set(target_ini_path_normalized)
     apply_path(update_task=False)
     centered_info("Успех", f"База перенесена в версию {target_version}")
