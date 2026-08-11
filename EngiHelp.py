@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.3.8"
+SCRIPT_VERSION = "v1.9.3.9"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -2506,28 +2506,17 @@ else:
     # Задач нет вообще — показываем пустую строку
     task_id_combobox.current(0)
 
-# Привяжите сохранение к событию изменения текста в поле (опционально)
-_task_selection_initialized = False  # Флаг для пропуска первого вызова trace
-
 def _on_task_id_change(*_):
     """Callback для trace_add — вызывается при любом изменении task_id_var."""
-    global _prev_task_id, _task_selection_initialized
-
-    # Защита от дурака: если в поле вставили номер задачи с пробелами
-    # (например, скопировали "123456 " из другого источника) — обрезаем их.
     current_value = task_id_var.get()
     stripped_value = current_value.strip()
     if stripped_value != current_value:
         task_id_var.set(stripped_value)
         return  # trace сработает повторно уже с очищенным значением
 
-    # Пропускаем первый вызов при инициализации
-    if not _task_selection_initialized:
-        _task_selection_initialized = True
-        _prev_task_id = task_id_var.get().strip()  # Инициализируем _prev_task_id
-        return
     on_task_selected(None)
 
+_prev_task_id = task_id_var.get().strip()
 task_id_var.trace_add("write", _on_task_id_change)
 
 def save_task_id_to_file():
