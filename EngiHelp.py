@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.2.2"
+SCRIPT_VERSION = "v1.9.3.8"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -56,19 +56,21 @@ FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
 def load_data():
     """Загружает данные из единого JSON-файла."""
     if not os.path.exists(DATA_FILE):
-        return {"settings": {"auto_update": True, "task_from_version": False, "recent_paths": []}, "tasks": {}}
+        return {"settings": {"auto_update": True, "task_from_version": False, "keep_cloud_files": False, "recent_paths": []}, "tasks": {}}
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             # Убедимся, что все ключи на месте
             if "settings" not in data:
-                data["settings"] = {"auto_update": True, "task_from_version": False, "recent_paths": []}
+                data["settings"] = {"auto_update": True, "task_from_version": False, "keep_cloud_files": False, "recent_paths": []}
+            if "keep_cloud_files" not in data["settings"]:
+                data["settings"]["keep_cloud_files"] = False
             if "tasks" not in data:
                 data["tasks"] = {}
             return data
     except (json.JSONDecodeError, IOError):
         # В случае ошибки возвращаем пустую структуру
-        return {"settings": {"auto_update": True, "task_from_version": False, "recent_paths": []}, "tasks": {}}
+        return {"settings": {"auto_update": True, "task_from_version": False, "keep_cloud_files": False, "recent_paths": []}, "tasks": {}}
 
 def save_data(data):
     """Сохраняет данные в единый JSON-файл."""
@@ -226,7 +228,8 @@ def load_settings_and_paths():
     paths = settings.get("recent_paths", [])
     auto_update = settings.get("auto_update", True)
     task_from_version = settings.get("task_from_version", False)
-    return paths, auto_update, task_from_version
+    keep_cloud_files = settings.get("keep_cloud_files", False)
+    return paths, auto_update, task_from_version, keep_cloud_files
 
 
 def save_settings_and_path(new_path):
@@ -245,6 +248,8 @@ def save_settings_and_path(new_path):
         data["settings"]["auto_update"] = auto_update_var.get()
     if 'task_from_version_var' in globals():
         data["settings"]["task_from_version"] = task_from_version_var.get()
+    if 'keep_cloud_files_var' in globals():
+        data["settings"]["keep_cloud_files"] = keep_cloud_files_var.get()
 
     save_data(data)
     
@@ -324,11 +329,13 @@ def extract_task_id_from_rk7srv_ini(ini_path):
     return None
 
 # ======================= Определение путей и начальных переменных =======================
-ini_paths, auto_update_enabled, task_from_version_enabled = load_settings_and_paths()
+ini_paths, auto_update_enabled, task_from_version_enabled, keep_cloud_files_enabled = load_settings_and_paths()
 ini_path = ini_paths[0] if ini_paths else ""
 auto_update_var = tk.BooleanVar(value=auto_update_enabled)
 # Флаг "Выбор задачи из выбора версии": при смене версии RK предлагать выбрать задачу
 task_from_version_var = tk.BooleanVar(value=task_from_version_enabled)
+# Флаг "Сохранять временные файлы Cloud RK7man": не удалять .ini после запуска
+keep_cloud_files_var = tk.BooleanVar(value=keep_cloud_files_enabled)
 INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
 
 # Создаём task_id_var ЗДЕСЬ, до первого использования
@@ -623,6 +630,245 @@ def apply_port(ini_path_val, port):
         ok2 = False
         print("[WARN] apply_port: имя сервера из [REFSERVER] не найдено, rk7man.ini не обновлён")
     print(f"[PORT] rk7srv={ok1}, rk7man={ok2}, server='{server_name}', port={port}")
+
+# ======================= Cloud RK7man =======================
+CLOUD_RK7MAN_PATTERN = re.compile(r'^([A-Za-z0-9_]+)\s*=\s*([^\s:=]+):(\d{1,5})$')
+
+def parse_cloud_rk7man_string(raw):
+    """Разбирает строку вида RK7SRV_622020001=srv01.rkcloud.ucs.ru:50072.
+    Возвращает (server_name, host, port) или None, если формат не подходит."""
+    if not raw:
+        return None
+    m = CLOUD_RK7MAN_PATTERN.match(raw.strip())
+    if not m:
+        return None
+    server_name, host, port_str = m.group(1), m.group(2), m.group(3)
+    port = int(port_str)
+    if not (1 <= port <= 65535):
+        return None
+    return server_name, host, port
+
+def apply_cloud_rk7man_config(ini_path_val, server_name, host, port):
+    """Читает rk7man.ini, применяет облачные настройки в памяти и записывает
+    во временный файл рядом с оригиналом. Реальный rk7man.ini не изменяется.
+    Возвращает (temp_path, None) при успехе или (None, error_message) при ошибке."""
+    rk7man_path = os.path.join(ini_path_val, "rk7man.ini")
+    if not os.path.isfile(rk7man_path):
+        return None, "Файл rk7man.ini не найден"
+    try:
+        try:
+            with open(rk7man_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            enc = 'utf-8'
+        except UnicodeDecodeError:
+            with open(rk7man_path, 'r', encoding='cp1251') as f:
+                lines = f.readlines()
+            enc = 'cp1251'
+
+        old_server = None
+        for line in lines:
+            m = re.match(r'^\s*Server\s*=\s*(\S+)', line, re.IGNORECASE)
+            if m:
+                old_server = m.group(1).strip()
+                break
+
+        new_lines = []
+        tcpdns_updated = False
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r'^\s*Server\s*=', stripped, re.IGNORECASE):
+                new_lines.append(f"Server={server_name}\n")
+            elif re.match(r'^\s*PORT\s*=', stripped, re.IGNORECASE):
+                new_lines.append(f"PORT={port}\n")
+            elif old_server and re.match(rf'^\s*{re.escape(old_server)}\s*=', stripped, re.IGNORECASE):
+                new_lines.append(f"{server_name}={host}:{port}\n")
+                tcpdns_updated = True
+            else:
+                new_lines.append(line)
+
+        if not tcpdns_updated:
+            final_lines = []
+            in_tcpdns = False
+            inserted = False
+            for line in new_lines:
+                stripped = line.strip()
+                if in_tcpdns and stripped.startswith('[') and not inserted:
+                    final_lines.append(f"{server_name}={host}:{port}\n")
+                    inserted = True
+                    in_tcpdns = False
+                final_lines.append(line)
+                if re.match(r'^\[TCPDNS\]', stripped, re.IGNORECASE):
+                    in_tcpdns = True
+            if in_tcpdns and not inserted:
+                final_lines.append(f"{server_name}={host}:{port}\n")
+                inserted = True
+            if not inserted:
+                final_lines.append(f"\n[TCPDNS]\n{server_name}={host}:{port}\n")
+            new_lines = final_lines
+
+        cloud_log_dir = os.path.join(ini_path_val, "Cloud_log")
+        os.makedirs(cloud_log_dir, exist_ok=True)
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix='.ini', prefix='rk7man_cloud_', dir=cloud_log_dir)
+        try:
+            # Гарантируем наличие [DBSYNC] UseDBSync=0 в временном файле
+            has_dbsync_section = any(re.match(r'^\s*\[DBSYNC\]', l, re.IGNORECASE) for l in new_lines)
+            has_usedbsync = any(re.match(r'^\s*UseDBSync\s*=', l, re.IGNORECASE) for l in new_lines)
+
+            if has_dbsync_section and has_usedbsync:
+                # Секция есть и ключ есть — принудительно выставляем 0
+                final2 = []
+                for line in new_lines:
+                    if re.match(r'^\s*UseDBSync\s*=', line, re.IGNORECASE):
+                        final2.append("UseDBSync=0\n")
+                    else:
+                        final2.append(line)
+                new_lines = final2
+            elif has_dbsync_section and not has_usedbsync:
+                # Секция есть, ключа нет — вставляем ключ сразу после [DBSYNC]
+                final2 = []
+                for line in new_lines:
+                    final2.append(line)
+                    if re.match(r'^\s*\[DBSYNC\]', line, re.IGNORECASE):
+                        final2.append("UseDBSync=0\n")
+                new_lines = final2
+            else:
+                # Секции нет — добавляем в конец
+                if new_lines and not new_lines[-1].endswith('\n'):
+                    new_lines.append('\n')
+                new_lines.append("\n[DBSYNC]\nUseDBSync=0\n")
+
+            with os.fdopen(tmp_fd, 'w', encoding=enc) as f:
+                f.writelines(new_lines)
+        except Exception:
+            try:
+                os.close(tmp_fd)
+            except OSError:
+                pass
+            raise
+        return tmp_path, None
+    except Exception as e:
+        return None, str(e)
+
+def launch_cloud_rk7man(tmp_ini_path):
+    """Запускает rk7man.exe напрямую с временным ini-файлом в качестве аргумента,
+    без изменения реального rk7man.ini. Рабочая директория — там, где лежит rk7man.exe,
+    иначе исполняемый файл выдаёт ошибку."""
+    exe_path = os.path.join(ini_path, "rk7man.exe")
+    if not os.path.isfile(exe_path):
+        centered_error("Ошибка", f"Файл не найден:\n{exe_path}")
+        return
+
+    ini_path_norm = os.path.normpath(ini_path).lower()
+    for proc, exe_dir in _get_process_by_name('rk7man.exe'):
+        if exe_dir == ini_path_norm:
+            try:
+                proc.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+    time.sleep(0.5)
+
+    try:
+        proc = subprocess.Popen([exe_path, tmp_ini_path], cwd=ini_path)
+    except Exception as e:
+        centered_error("Ошибка запуска", str(e))
+        return
+
+    if not keep_cloud_files_var.get():
+        def _cleanup_after_exit():
+            proc.wait()
+            try:
+                os.remove(tmp_ini_path)
+            except OSError:
+                pass
+        threading.Thread(target=_cleanup_after_exit, daemon=True).start()
+
+def cloud_rk7man_dialog():
+    """Окно для ввода строки подключения к облачному серверу и запуска rk7man.exe."""
+    if not ini_path or not os.path.isfile(os.path.join(ini_path, "rk7man.ini")):
+        centered_error("Ошибка", "Файл rk7man.ini не найден в текущем пути.")
+        return
+
+    win = tk.Toplevel(root)
+    win.withdraw()
+    win.title("Cloud RK7man")
+
+    if icon_path:
+        win.iconbitmap(icon_path)
+
+    win.transient(root)
+    win.grab_set()
+
+    frame = tk.Frame(win)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(
+        frame,
+        text="Введите строку подключения к облачному серверу\n(строку можно взять у бота):",
+        justify="left"
+    ).pack(padx=15, pady=(15, 5))
+
+    tk.Label(
+        frame,
+        text="Шаблон: ИМЯ_СЕРВЕРА=хост:порт",
+        justify="left",
+        fg="gray40",
+        font=("TkDefaultFont", 8)
+    ).pack(padx=15, pady=(0, 8))
+
+    entry_var = tk.StringVar()
+    entry = tk.Entry(frame, textvariable=entry_var, width=45)
+    entry.pack(padx=15, pady=(0, 10))
+
+    def on_run():
+        parsed = parse_cloud_rk7man_string(entry_var.get())
+        if not parsed:
+            centered_error(
+                "Ошибка",
+                "Строка не подходит по формату.\n"
+                "Ожидается: ИМЯ_СЕРВЕРА=хост:порт\n"
+                "Пример: RK7SRV_622020001=srv01.rkcloud.ucs.ru:50072"
+            )
+            return
+        server_name, host, port = parsed
+        win.destroy()
+        tmp_ini_path, err = apply_cloud_rk7man_config(ini_path, server_name, host, port)
+        if not tmp_ini_path:
+            centered_error("Ошибка", f"Не удалось подготовить настройки:\n{err}")
+            return
+        launch_cloud_rk7man(tmp_ini_path)
+
+    def on_enter_key(event):
+        on_run()
+
+    win.bind("<Return>", on_enter_key)
+
+    btn_frame = tk.Frame(frame)
+    btn_frame.pack(pady=(0, 15))
+    run_btn = tk.Button(btn_frame, text="Запустить", command=on_run, width=12)
+    run_btn.pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Отмена", command=win.destroy, width=12).pack(side="left", padx=5)
+
+    # Если в буфере обмена лежит строка нужного формата — сразу подставляем её
+    # и выделяем кнопку "Запустить", чтобы Enter сразу запускал процесс.
+    # Иначе просто активируем поле ввода с мигающим курсором для Ctrl+V.
+    try:
+        clipboard_text = win.clipboard_get()
+    except tk.TclError:
+        clipboard_text = ""
+
+    if parse_cloud_rk7man_string(clipboard_text):
+        entry_var.set(clipboard_text.strip())
+        run_btn.focus_set()
+    else:
+        entry.focus_set()
+        entry.icursor(tk.END)
+
+    _center_window(win)
+
+    win.focus_force()
+    win.deiconify()
+# ======================= Конец Cloud RK7man =======================
 
 def update_ini_file(filepath, value, key):
     try:
@@ -2747,7 +2993,7 @@ tk.Button(
 path_frame = tk.Frame(path_task_frame)
 path_frame.pack(fill="x", padx=5, pady=(5, 5))
 path_var = tk.StringVar()
-ini_paths, auto_update_enabled, task_from_version_enabled = load_settings_and_paths()
+ini_paths, auto_update_enabled, task_from_version_enabled, keep_cloud_files_enabled = load_settings_and_paths()
 if ini_paths:
     path_var.set(ini_paths[0])
 path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
@@ -3436,7 +3682,7 @@ def start_rk7man_only():
         centered_error("Ошибка", f"Файл не найден:\n{bat_path}")
         return
     try:
-        os.startfile(bat_path)
+        subprocess.Popen(f'start "" cmd /c "{bat_path}"', shell=True, cwd=ini_path)
     except Exception as e:
         centered_error("Ошибка запуска", str(e))
 
@@ -4436,6 +4682,10 @@ delete_task_btn.grid(row=1, column=0, padx=5, sticky="ew", pady=(5, 0))
 change_version_btn = tk.Button(check_folder_frame, text="Сменить версию RK", command=change_rk_version)
 change_version_btn.grid(row=1, column=1, padx=5, sticky="ew", pady=(5, 0))
 
+# Кнопка "Cloud RK7man" (экспериментальная, под "Очистить Base")
+cloud_rk7man_btn = tk.Button(check_folder_frame, text="Cloud RK7man", command=cloud_rk7man_dialog)
+cloud_rk7man_btn.grid(row=1, column=2, padx=5, sticky="ew", pady=(5, 0))
+
 # Настройка весов строк и столбцов для равномерного распределения
 check_folder_frame.grid_columnconfigure(0, weight=1)
 check_folder_frame.grid_columnconfigure(1, weight=1)
@@ -4516,6 +4766,7 @@ def save_prefs_flags(*_):
     data = load_data()
     data["settings"]["auto_update"] = auto_update_var.get()
     data["settings"]["task_from_version"] = task_from_version_var.get()
+    data["settings"]["keep_cloud_files"] = keep_cloud_files_var.get()
     save_data(data)
 
 tk.Checkbutton(
@@ -4543,6 +4794,25 @@ desc_label = tk.Label(
     anchor="w"
 )
 desc_label.pack(padx=(30, 10), pady=(0, 10), anchor="w", fill="x")
+
+tk.Checkbutton(
+    prefs_tab,
+    text="Сохранять временные файлы Cloud RK7man",
+    variable=keep_cloud_files_var,
+    command=save_prefs_flags
+).pack(padx=10, pady=(0, 2), anchor="w")
+
+cloud_files_desc_label = tk.Label(
+    prefs_tab,
+    text=("Временные .ini файлы Cloud RK7man хранятся в папке Cloud_log. "
+          "Если флаг выключен — файл удаляется после закрытия rk7man.exe."),
+    justify="left",
+    fg="gray40",
+    font=("TkDefaultFont", 8),
+    wraplength=350,
+    anchor="w"
+)
+cloud_files_desc_label.pack(padx=(30, 10), pady=(0, 10), anchor="w", fill="x")
 
 # Info tab
 info_tab = tk.Frame(notebook)
