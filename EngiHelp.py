@@ -13,7 +13,7 @@ import re
 import shutil
 import traceback
 import json
-import psutil
+import psutil 
 import subprocess
 import time
 import threading
@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.3.9"
+SCRIPT_VERSION = "v1.9.3.12"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -227,8 +227,8 @@ def load_settings_and_paths():
     settings = data.get("settings", {})
     paths = settings.get("recent_paths", [])
     auto_update = settings.get("auto_update", True)
-    task_from_version = settings.get("task_from_version", False)
-    keep_cloud_files = settings.get("keep_cloud_files", False)
+    task_from_version = settings.get("task_from_version", True)
+    keep_cloud_files = settings.get("keep_cloud_files", True)
     return paths, auto_update, task_from_version, keep_cloud_files
 
 
@@ -1522,6 +1522,10 @@ def save_usedbsync_to_json(value):
 
 # Кнопка "Открыть путь"
 def open_explorer_to_root():
+    if not path_var.get().strip():
+        centered_warning("Предупреждение", "Путь не выбран.\nНажмите 'Обзор' для выбора пути к RK7.")
+        return
+
     task_id = task_id_var.get().strip()
     # if not task_id:
     #     centered_warning("Ошибка", "Сначала выберите задачу!")
@@ -2537,17 +2541,146 @@ def save_task_id_to_file():
         centered_error("Ошибка", f"Не удалось сохранить номер задачи:\n{e}")
 """
 
-# Функция по сбору параметров
+def get_usedbsync_values_for_path(path):
+    """Читает UseDBSync из всех INI-файлов для указанного пути."""
+    values = {}
+    for filename in FILES:
+        file_path = os.path.join(path, filename)
+        if os.path.isfile(file_path):
+            try:
+                value = _read_ini_key(file_path, "UseDBSync", "DBSYNC")
+                values[filename] = value if value else "0"
+            except Exception:
+                values[filename] = "0"
+    return values
+
+def get_usesql_value_for_path(ini_path_val):
+    """Читает USESQL из rk7srv.INI для указанного пути."""
+    rk7srv_path = os.path.join(ini_path_val, "rk7srv.INI")
+    if not os.path.isfile(rk7srv_path):
+        return "0"
+    try:
+        value = _read_ini_key(rk7srv_path, "USESQL", None)
+        return value if value else "0"
+    except Exception:
+        return "0"
+
+def get_port_value_for_path(ini_path_val):
+    """Читает PORT из секции [TCPSOC] файла rk7srv.INI для указанного пути."""
+    rk7srv_path = os.path.join(ini_path_val, "rk7srv.INI")
+    if not os.path.isfile(rk7srv_path):
+        return ""
+    try:
+        return _read_ini_key(rk7srv_path, "PORT", "TCPSOC") or ""
+    except Exception:
+        return ""
+
+def _read_ini_key(filepath, key, section):
+    """Читает значение ключа key из секции section файла filepath."""
+    try:
+        with open(filepath, 'r', encoding='cp1251') as f:
+            in_section = section is None
+            for line in f:
+                line = line.strip()
+                if section and re.match(rf'^\[{section}\]\s*$', line, re.IGNORECASE):
+                    in_section = True
+                    continue
+                if section and re.match(r'^\[.*\]\s*$', line):
+                    in_section = False
+                if in_section and re.match(rf'^\s*{key}\s*=\s*(.*)$', line, re.IGNORECASE):
+                    return line.split('=', 1)[1].strip()
+    except Exception:
+        pass
+    return None
+
+def get_station_server_for_path(ini_path_val):
+    """Читает Station и Server из wincash.ini для указанного пути."""
+    wincash_path = os.path.join(ini_path_val, "wincash.ini")
+    station, server = "", ""
+    if os.path.isfile(wincash_path):
+        try:
+            with open(wincash_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            with open(wincash_path, 'r', encoding='cp1251') as f:
+                content = f.read()
+        for line in content.splitlines():
+            l = line.strip()
+            if l.lower().startswith("station="):
+                station = l.split("=", 1)[-1].strip()
+            elif l.lower().startswith("server ="):
+                server = l.split("=", 1)[-1].strip()
+    return station, server
+
 def get_ini_settings(ini_path):
-    """Сбор параметров UseDBSync, UseSQL, Station, Server, Port из INI-файлов."""
+    """Сбор параметров UseDBSync, UseSQL, Station, Server, Port, UDBFILE, WorkModules из INI-файлов."""
+    station, server = get_station_server_for_path(ini_path)
     settings = {
-        "UseDBSync": get_usedbsync_values(),
-        "UseSQL": get_usesql_value(),
-        "Station": station_var.get(),
-        "Server": server_var.get(),
-        "Port": get_port_value(),
+        "UseDBSync": get_usedbsync_values_for_path(ini_path),
+        "UseSQL": get_usesql_value_for_path(ini_path),
+        "Station": station,
+        "Server": server,
+        "Port": get_port_value_for_path(ini_path),
     }
+    # Добавляем UDBFILE и WorkModules из rk7srv.INI
+    rk7srv = get_rk7srv_udb_workmodules(ini_path)
+    if rk7srv:
+        settings["UDBFILE"] = rk7srv.get("UDBFILE")
+        settings["WorkModules"] = rk7srv.get("WorkModules")
     return settings
+
+def get_rk7srv_udb_workmodules(ini_path_val):
+    """Читает UDBFILE и WorkModules из rk7srv.INI."""
+    rk7srv_path = os.path.join(ini_path_val, "rk7srv.INI")
+    if not os.path.isfile(rk7srv_path):
+        return None
+    try:
+        with open(rk7srv_path, 'r', encoding='cp1251') as f:
+            content = f.read()
+        result = {}
+        for line in content.splitlines():
+            m = re.match(r'^\s*(UDBFILE|WorkModules)\s*=\s*(.*)$', line, re.IGNORECASE)
+            if m:
+                result[m.group(1)] = m.group(2).strip()
+        return result if result else None
+    except Exception as e:
+        print(f"Ошибка чтения rk7srv.INI: {e}")
+        return None
+
+def _apply_rk7srv_udf_workmodules(rk7srv_ini_path, ini_settings):
+    """Восстанавливает UDBFILE и WorkModules в rk7srv.INI из сохранённых дефолтных значений."""
+    udbfile = ini_settings.get("UDBFILE")
+    workmodules = ini_settings.get("WorkModules")
+    if not udbfile and not workmodules:
+        return
+    try:
+        with open(rk7srv_ini_path, 'r', encoding='cp1251') as f:
+            lines = f.readlines()
+
+        new_lines = []
+        udbfile_written = False
+        workmodules_written = False
+
+        for line in lines:
+            if re.match(r'^\s*UDBFILE\s*=', line, re.IGNORECASE):
+                if udbfile:
+                    new_lines.append(f"UDBFILE            = {udbfile}\n")
+                    udbfile_written = True
+                else:
+                    new_lines.append(line)
+            elif re.match(r'^\s*WorkModules\s*=', line, re.IGNORECASE):
+                if workmodules:
+                    new_lines.append(f"WorkModules        = {workmodules}\n")
+                    workmodules_written = True
+                else:
+                    new_lines.append(line)
+            else:
+                new_lines.append(line)
+
+        with open(rk7srv_ini_path, 'w', encoding='cp1251') as f:
+            f.writelines(new_lines)
+    except Exception as e:
+        print(f"Ошибка восстановления UDBFILE/WorkModules: {e}")
 
 # ======================= Дефолтные настройки директории версии =======================
 
@@ -2604,6 +2737,9 @@ def apply_default_ini_settings(ini_path_val=None):
     # Применяем UseSQL
     if "UseSQL" in ini_settings and os.path.exists(rk7srv_ini_path):
         update_ini_file(rk7srv_ini_path, str(ini_settings["UseSQL"]), "USESQL")
+    # Восстанавливаем UDBFILE и WorkModules в rk7srv.INI
+    if os.path.exists(rk7srv_ini_path):
+        _apply_rk7srv_udf_workmodules(rk7srv_ini_path, ini_settings)
     # Применяем Station/Server
     if "Station" in ini_settings and "Server" in ini_settings:
         station_var.set(ini_settings["Station"])
@@ -2914,6 +3050,20 @@ def delete_task():
 
     if not centered_askyesno("Подтверждение удаления", confirm_msg):
         return
+
+    # === Шаг 0: Восстанавливаем дефолтные INI-настройки для всех связанных путей ===
+    ini_paths_to_restore = set()
+    # Основной ini_path
+    if task_info.get("ini_path"):
+        ini_paths_to_restore.add(task_info["ini_path"])
+    # ini_path из каждой версии
+    for _, ver_info in versions.items():
+        if ver_info.get("ini_path"):
+            ini_paths_to_restore.add(ver_info["ini_path"])
+
+    for ip in ini_paths_to_restore:
+        apply_default_ini_settings(ip)
+        print(f"[OK] Дефолтные настройки восстановлены для: {ip}")
 
     # === Шаг 1: Удаляем ВСЕ папки base и midbase с диска ===
     failed_paths = []
