@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.3.12"
+SCRIPT_VERSION = "v1.9.4.17"
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -1663,6 +1663,11 @@ def on_task_selected(event):
         server_var.set(ini_settings["Server"])
         save_wincash_params()
 
+    # Применяем REFSERVER
+    if "REFSERVER" in ini_settings:
+        refserver_var.set(ini_settings["REFSERVER"])
+        save_refserver_params()
+
     # Применяем Port
     if "Port" in ini_settings and ini_settings["Port"]:
         apply_port(ini_path_from_task, str(ini_settings["Port"]))
@@ -1796,6 +1801,13 @@ def change_rk_version():
             "Ожидается папка вида INST7.25.09.2004")
         return
 
+    # Определяем директорию поиска версий
+    current_product_root = find_product_root(current_ini_path)
+    if not current_product_root:
+        centered_error("Ошибка", "Не удалось определить корневую папку продукта.")
+        return
+    versions_search_dir = os.path.dirname(current_product_root)
+
     # Ищем доступные версии
     available_versions = find_available_rk_versions(current_ini_path)
     other_versions = [v for v in available_versions if v != current_version]
@@ -1805,7 +1817,7 @@ def change_rk_version():
         centered_info("Информация",
             f"Других версий RK не найдено.\n"
             f"Текущая версия: {current_version}\n"
-            f"Директория поиска: {os.path.dirname(find_product_root(current_ini_path))}")
+            f"Директория поиска: {versions_search_dir}")
         return
 
     # === Диалог выбора версии ===
@@ -1822,11 +1834,67 @@ def change_rk_version():
     frame = tk.Frame(select_win)
     frame.pack(fill="both", expand=True)
 
+    # Переменная для хранения редактируемой директории поиска версий
+    search_dir_var = tk.StringVar(value=versions_search_dir)
+
+    # Заголовок с информацией о задаче и текущей версии
     tk.Label(frame, text=(
         f"Задача: {selected_task_id}\n"
-        f"Текущая версия: {current_version}\n\n"
-        f"Выберите версию для переноса базы:"
+        f"Текущая версия: {current_version}"
     ), justify="left").pack(padx=10, pady=(10, 5))
+
+    # Блок с директорией поиска версий
+    dir_frame = tk.Frame(frame)
+    dir_frame.pack(fill="x", padx=10, pady=(5, 0))
+
+    tk.Label(dir_frame, text="Папка поиска версий:", anchor="w").pack(anchor="w")
+
+    dir_input_frame = tk.Frame(dir_frame)
+    dir_input_frame.pack(fill="x", pady=(3, 0))
+
+    dir_entry = tk.Entry(dir_input_frame, textvariable=search_dir_var, width=40)
+    dir_entry.pack(side="left", fill="x", expand=True)
+
+    def on_browse_version_dir():
+        """Открывает диалог выбора папки и обновляет список версий."""
+        new_dir = filedialog.askdirectory(
+            title="Выберите папку с версиями RK",
+            initialdir=search_dir_var.get()
+        )
+        if new_dir:
+            search_dir_var.set(new_dir)
+            # Ищем версии в новой директории
+            new_versions = []
+            try:
+                for item in os.listdir(new_dir):
+                    full_path = os.path.join(new_dir, item)
+                    if os.path.isdir(full_path):
+                        match = re.match(r'^INST(.+)$', item, re.IGNORECASE)
+                        if match:
+                            version_str = match.group(1)
+                            bin_win = os.path.join(full_path, "bin", "win")
+                            if os.path.isdir(bin_win):
+                                new_versions.append(version_str)
+            except Exception as e:
+                print(f"Ошибка сканирования директории: {e}")
+
+            new_other_versions = [v for v in new_versions if v != current_version]
+            new_other_versions = sorted(new_other_versions, reverse=True)
+
+            if new_other_versions:
+                version_var.set(new_other_versions[0])
+                version_combo['values'] = new_other_versions
+                warning_label.config(text="⚠ Процессы refsrv.exe и rk7man.exe будут закрыты!")
+            else:
+                warning_label.config(
+                    text=f"⚠ Версий не найдено в: {os.path.basename(new_dir)}",
+                    fg="orange"
+                )
+
+    tk.Button(dir_input_frame, text="Образ", command=on_browse_version_dir, width=6).pack(side="left", padx=(5, 0))
+
+    # Подсказка о выборе версии
+    tk.Label(frame, text="\nВыберите версию для переноса базы:", justify="left").pack(padx=10, pady=(5, 0))
 
     version_var = tk.StringVar()
     version_combo = ttk.Combobox(
@@ -1837,17 +1905,19 @@ def change_rk_version():
     if other_versions:
         version_combo.current(0)
 
-    tk.Label(frame, text=(
+    warning_label = tk.Label(frame, text=(
         "⚠ Процессы refsrv.exe и rk7man.exe будут закрыты!"
-    ), fg="red", font=("TkDefaultFont", 8)).pack(padx=10, pady=(5, 0))
+    ), fg="red", font=("TkDefaultFont", 8))
+    warning_label.pack(padx=10, pady=(5, 0))
 
     def on_confirm():
         target_version = version_var.get()
         if not target_version:
             centered_warning("Предупреждение", "Выберите версию!")
             return
+        target_dir = search_dir_var.get()
         select_win.destroy()
-        perform_version_change(selected_task_id, current_version, target_version)
+        perform_version_change(selected_task_id, current_version, target_version, target_dir)
 
     btn_frame = tk.Frame(frame)
     btn_frame.pack(pady=10)
@@ -1860,7 +1930,7 @@ def change_rk_version():
     select_win.deiconify()
 
 
-def perform_version_change(task_id, current_version, target_version):
+def perform_version_change(task_id, current_version, target_version, target_dir=None):
     """Выполняет перенос базы задачи в другую версию RK с заменой только rk7.udb."""
     data = load_data()
     tasks = data.get("tasks", {})
@@ -1869,7 +1939,12 @@ def perform_version_change(task_id, current_version, target_version):
 
     current_ini_path = task_info.get("ini_path", path_var.get())
     current_product_root = find_product_root(current_ini_path)
-    parent_dir = os.path.dirname(current_product_root)
+
+    # Используем переданную директорию или вычисляем из текущего пути
+    if target_dir:
+        parent_dir = target_dir
+    else:
+        parent_dir = os.path.dirname(current_product_root)
 
     # Пути к целевой версии
     target_product_root = os.path.join(parent_dir, f"INST{target_version}")
@@ -2230,6 +2305,10 @@ def apply_task_version(task_id, selected_version):
         station_var.set(ini_settings["Station"])
         server_var.set(ini_settings["Server"])
         save_wincash_params()
+
+    if "REFSERVER" in ini_settings:
+        refserver_var.set(ini_settings["REFSERVER"])
+        save_refserver_params()
 
     if "Port" in ini_settings and ini_settings["Port"]:
         apply_port(ini_path_from_version, str(ini_settings["Port"]))
@@ -2612,15 +2691,45 @@ def get_station_server_for_path(ini_path_val):
                 server = l.split("=", 1)[-1].strip()
     return station, server
 
+def get_refserver_name_for_path(ini_path_val):
+    """Читает имя сервера из [REFSERVER] Server = ... в rk7srv.INI для указанного пути."""
+    rk7srv_path = os.path.join(ini_path_val, "rk7srv.INI")
+    if not os.path.isfile(rk7srv_path):
+        return ""
+    try:
+        try:
+            with open(rk7srv_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            with open(rk7srv_path, 'r', encoding='cp1251') as f:
+                lines = f.readlines()
+        in_refserver = False
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r'^\[REFSERVER\]', stripped, re.IGNORECASE):
+                in_refserver = True
+                continue
+            if in_refserver:
+                if stripped.startswith('['):
+                    break
+                m = re.match(r'^\s*Server\s*=\s*(\S+)', stripped, re.IGNORECASE)
+                if m:
+                    return m.group(1).strip()
+    except Exception:
+        pass
+    return ""
+
 def get_ini_settings(ini_path):
-    """Сбор параметров UseDBSync, UseSQL, Station, Server, Port, UDBFILE, WorkModules из INI-файлов."""
+    """Сбор параметров UseDBSync, UseSQL, Station, Server, Port, UDBFILE, WorkModules, REFSERVER из INI-файлов."""
     station, server = get_station_server_for_path(ini_path)
+    refserver = get_refserver_name_for_path(ini_path)
     settings = {
         "UseDBSync": get_usedbsync_values_for_path(ini_path),
         "UseSQL": get_usesql_value_for_path(ini_path),
         "Station": station,
         "Server": server,
         "Port": get_port_value_for_path(ini_path),
+        "REFSERVER": refserver,
     }
     # Добавляем UDBFILE и WorkModules из rk7srv.INI
     rk7srv = get_rk7srv_udb_workmodules(ini_path)
@@ -2724,6 +2833,7 @@ def apply_default_ini_settings(ini_path_val=None):
     if not default_entry:
         # Дефолтных настроек нет — просто обновляем UI
         load_wincash_params()
+        load_refserver_params()
         on_check()
         return
     ini_settings = default_entry.get("ini_settings", {})
@@ -2745,6 +2855,10 @@ def apply_default_ini_settings(ini_path_val=None):
         station_var.set(ini_settings["Station"])
         server_var.set(ini_settings["Server"])
         save_wincash_params()
+    # Применяем REFSERVER
+    if "REFSERVER" in ini_settings:
+        refserver_var.set(ini_settings["REFSERVER"])
+        save_refserver_params()
     on_check()
     print(f"[OK] Дефолтные настройки применены для: {ini_path_val}")
 
@@ -3117,7 +3231,7 @@ def delete_task():
     if failed_paths:
         result_msg += f"\nНе удалось удалить: {len(failed_paths)}"
 
-    centered_info("Успех", result_msg)
+    # centered_info("Успех", result_msg)
 
 
 # Кнопка "Сохранить"
@@ -4522,6 +4636,7 @@ flags_frame.grid_columnconfigure(3, weight=1)
 # ======================= Параметры из wincash.ini =======================
 station_var = tk.StringVar()
 server_var = tk.StringVar()
+refserver_var = tk.StringVar()
 
 def load_wincash_params():
     wincash_path = os.path.join(ini_path, "wincash.ini")
@@ -4541,6 +4656,193 @@ def load_wincash_params():
             server_var.set(line.strip().split("=", 1)[-1])
     task_id_combobox["values"] = load_task_ids()
     #task_id_combobox.current(0)
+
+def load_refserver_params(ini_path_val=None):
+    """Читает имя REFSERVER из rk7srv.INI [REFSERVER] Server = ..."""
+    global ini_path
+    if ini_path_val is None:
+        ini_path_val = ini_path
+    rk7srv_path = os.path.join(ini_path_val, "rk7srv.INI")
+    if not os.path.isfile(rk7srv_path):
+        return
+    try:
+        try:
+            with open(rk7srv_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            with open(rk7srv_path, 'r', encoding='cp1251') as f:
+                lines = f.readlines()
+        in_refserver = False
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r'^\[REFSERVER\]', stripped, re.IGNORECASE):
+                in_refserver = True
+                continue
+            if in_refserver:
+                if stripped.startswith('['):
+                    break
+                m = re.match(r'^\s*Server\s*=\s*(\S+)', stripped, re.IGNORECASE)
+                if m:
+                    refserver_var.set(m.group(1).strip())
+                    break
+    except Exception:
+        pass
+
+def save_refserver_params():
+    """Сохраняет REFSERVER в rk7srv.INI, RKEEPER.INI и rk7man.ini."""
+    ref_value = refserver_var.get().strip()
+    if not ref_value:
+        return
+
+    # 1. rk7srv.INI [REFSERVER] Server = ...
+    rk7srv_path = os.path.join(ini_path, "rk7srv.INI")
+    if os.path.isfile(rk7srv_path):
+        try:
+            try:
+                with open(rk7srv_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                enc = 'utf-8'
+            except UnicodeDecodeError:
+                with open(rk7srv_path, 'r', encoding='cp1251') as f:
+                    lines = f.readlines()
+                enc = 'cp1251'
+
+            new_lines = []
+            in_refserver = False
+            server_updated = False
+            for line in lines:
+                stripped = line.strip()
+                if re.match(r'^\[REFSERVER\]', stripped, re.IGNORECASE):
+                    in_refserver = True
+                    server_updated = False
+                    new_lines.append(line)
+                    continue
+                if in_refserver:
+                    if stripped.startswith('['):
+                        # Вышли из секции - добавляем Server только если он ещё не был обновлён
+                        if not server_updated:
+                            new_lines.append(f"Server             = {ref_value}\n")
+                        in_refserver = False
+                    elif re.match(r'^\s*Server\s*=', stripped, re.IGNORECASE):
+                        new_lines.append(f"Server             = {ref_value}\n")
+                        server_updated = True
+                        continue
+                new_lines.append(line)
+
+            if in_refserver and not server_updated:
+                new_lines.append(f"Server             = {ref_value}\n")
+
+            if not server_updated and not in_refserver:
+                if new_lines and not new_lines[-1].endswith('\n'):
+                    new_lines.append('\n')
+                new_lines.append("\n[REFSERVER]\n")
+                new_lines.append(f"Server             = {ref_value}\n")
+
+            shutil.copy2(rk7srv_path, rk7srv_path + ".bak")
+            with open(rk7srv_path, 'w', encoding=enc) as f:
+                f.writelines(new_lines)
+        except Exception as e:
+            centered_error("Ошибка", f"Не удалось обновить rk7srv.INI:\n{e}")
+
+    # 2. RKEEPER.INI [Config] RefServer = ...
+    rkeeper_path = os.path.join(ini_path, "RKEEPER.INI")
+    if os.path.isfile(rkeeper_path):
+        try:
+            try:
+                with open(rkeeper_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                enc = 'utf-8'
+            except UnicodeDecodeError:
+                with open(rkeeper_path, 'r', encoding='cp1251') as f:
+                    lines = f.readlines()
+                enc = 'cp1251'
+
+            new_lines = []
+            in_config = False
+            refserver_updated = False
+            for line in lines:
+                stripped = line.strip()
+                if re.match(r'^\[Config\]', stripped, re.IGNORECASE):
+                    in_config = True
+                    refserver_updated = False
+                    new_lines.append(line)
+                    continue
+                if in_config:
+                    if stripped.startswith('['):
+                        # Вышли из секции - добавляем RefServer только если он ещё не был обновлён
+                        if not refserver_updated:
+                            new_lines.append(f"RefServer = {ref_value}\n")
+                        in_config = False
+                    elif re.match(r'^\s*RefServer\s*=', stripped, re.IGNORECASE):
+                        new_lines.append(f"RefServer = {ref_value}\n")
+                        refserver_updated = True
+                        continue
+                new_lines.append(line)
+
+            if in_config and not refserver_updated:
+                new_lines.append(f"RefServer = {ref_value}\n")
+
+            if not refserver_updated and not in_config:
+                if new_lines and not new_lines[-1].endswith('\n'):
+                    new_lines.append('\n')
+                new_lines.append("\n[Config]\n")
+                new_lines.append(f"RefServer = {ref_value}\n")
+
+            shutil.copy2(rkeeper_path, rkeeper_path + ".bak")
+            with open(rkeeper_path, 'w', encoding=enc) as f:
+                f.writelines(new_lines)
+        except Exception as e:
+            centered_error("Ошибка", f"Не удалось обновить RKEEPER.INI:\n{e}")
+
+    # 3. rk7man.ini [REFEDIT] Server=...
+    rk7man_path = os.path.join(ini_path, "rk7man.ini")
+    if os.path.isfile(rk7man_path):
+        try:
+            try:
+                with open(rk7man_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                enc = 'utf-8'
+            except UnicodeDecodeError:
+                with open(rk7man_path, 'r', encoding='cp1251') as f:
+                    lines = f.readlines()
+                enc = 'cp1251'
+
+            new_lines = []
+            in_refedit = False
+            server_updated = False
+            for line in lines:
+                stripped = line.strip()
+                if re.match(r'^\[REFEDIT\]', stripped, re.IGNORECASE):
+                    in_refedit = True
+                    server_updated = False
+                    new_lines.append(line)
+                    continue
+                if in_refedit:
+                    if stripped.startswith('['):
+                        # Вышли из секции - добавляем Server только если он ещё не был обновлён
+                        if not server_updated:
+                            new_lines.append(f"Server={ref_value}\n")
+                        in_refedit = False
+                    elif re.match(r'^\s*Server\s*=', stripped, re.IGNORECASE):
+                        new_lines.append(f"Server={ref_value}\n")
+                        server_updated = True
+                        continue
+                new_lines.append(line)
+
+            if in_refedit and not server_updated:
+                new_lines.append(f"Server={ref_value}\n")
+
+            if not server_updated and not in_refedit:
+                if new_lines and not new_lines[-1].endswith('\n'):
+                    new_lines.append('\n')
+                new_lines.append("\n[REFEDIT]\n")
+                new_lines.append(f"Server={ref_value}\n")
+
+            shutil.copy2(rk7man_path, rk7man_path + ".bak")
+            with open(rk7man_path, 'w', encoding=enc) as f:
+                f.writelines(new_lines)
+        except Exception as e:
+            centered_error("Ошибка", f"Не удалось обновить rk7man.ini:\n{e}")
 
 
 def save_wincash_params():
@@ -4609,6 +4911,7 @@ def apply_network_ids():
         return
 
     apply_network_ids_silent()
+    save_refserver_params()
     centered_info("Успех", f"Данные сохранены для задачи {task_id}")
 
 def apply_network_ids_silent():
@@ -4617,12 +4920,13 @@ def apply_network_ids_silent():
     apply_network_ids_silent_for_task(task_id)
 
 def apply_network_ids_silent_for_task(task_id):
-    """Сохраняет Station и Server в JSON для указанной задачи (без messagebox)."""
+    """Сохраняет Station, Server и REFSERVER в JSON для указанной задачи (без messagebox)."""
     if not task_id:
         return
 
     station_value = station_var.get().strip()
     server_value = server_var.get().strip()
+    refserver_value = refserver_var.get().strip()
 
     data = load_data()
     tasks = data.get("tasks", {})
@@ -4638,6 +4942,7 @@ def apply_network_ids_silent_for_task(task_id):
 
     task_data["ini_settings"]["Station"] = station_value
     task_data["ini_settings"]["Server"] = server_value
+    task_data["ini_settings"]["REFSERVER"] = refserver_value
 
     # Если у задачи есть версии - обновляем только АКТИВНУЮ версию (по ini_path)
     versions = task_data.get("versions", {})
@@ -4650,6 +4955,7 @@ def apply_network_ids_silent_for_task(task_id):
                     version_data["ini_settings"] = {}
                 version_data["ini_settings"]["Station"] = station_value
                 version_data["ini_settings"]["Server"] = server_value
+                version_data["ini_settings"]["REFSERVER"] = refserver_value
                 break  # Нашли активную версию, выходим
 
     data["tasks"] = tasks
@@ -4657,6 +4963,7 @@ def apply_network_ids_silent_for_task(task_id):
 
     # Дополнительно применяем в реальные ini-файлы
     save_wincash_params()
+    save_refserver_params()
 
 def apply_ini_flags_silent_for_task(task_id):
     """Сохраняет UseSQL и UseDBSync в JSON для указанной задачи (при смене задачи)."""
@@ -4704,26 +5011,36 @@ def apply_ini_flags_silent_for_task(task_id):
 info_frame = tk.LabelFrame(settings_tab, text="Сетевые ID")
 info_frame.pack(padx=10, pady=(5, 10), fill="x", ipadx=2, ipady=2)
 
+# Столбец 0: Метки MID и CASH
 tk.Label(info_frame, text="MID:").grid(row=0, column=0, sticky="w", padx=(5, 0), pady=3)
-tk.Entry(info_frame, textvariable=server_var).grid(row=0, column=1, sticky="ew", padx=5, pady=3)
-
 tk.Label(info_frame, text="CASH:").grid(row=1, column=0, sticky="w", padx=(5, 0), pady=3)
+
+# Столбец 1: Поля ввода MID и CASH
+tk.Entry(info_frame, textvariable=server_var).grid(row=0, column=1, sticky="ew", padx=5, pady=3)
 tk.Entry(info_frame, textvariable=station_var).grid(row=1, column=1, sticky="ew", padx=5, pady=3)
 
+# Столбец 2: Метка REFSERVER
+tk.Label(info_frame, text="REFSERVER:").grid(row=0, column=2, sticky="w", padx=(15, 0), pady=3)
+
+# Столбец 3: Поле REFSERVER и кнопка "Применить"
+tk.Entry(info_frame, textvariable=refserver_var, width=20).grid(row=0, column=3, sticky="ew", padx=5, pady=3)
 apply_btn = tk.Button(info_frame, text="Применить", command=apply_network_ids)
-apply_btn.grid(row=0, column=2, rowspan=2, sticky="ns", padx=(8, 5), pady=5)
+apply_btn.grid(row=1, column=3, sticky="ew", padx=13, pady=2)
 
 info_frame.grid_columnconfigure(1, weight=1)
-info_frame.grid_columnconfigure(2, minsize=90)
+info_frame.grid_columnconfigure(2, minsize=80)
+info_frame.grid_columnconfigure(3, minsize=80)
 
-# Автосохранение при любом изменении (если хотите оставить)
+# Автосохранение при любом изменении
 station_var.trace_add("write", lambda *args: save_wincash_params())
 server_var.trace_add("write", lambda *args: save_wincash_params())
+refserver_var.trace_add("write", lambda *args: save_refserver_params())
 
 
 
 # Автозагрузка значений при старте
 load_wincash_params()
+load_refserver_params()
 
 # Подсказка при наведении на кнопку "Проверить файлы"
 def create_tooltip(widget, text):
