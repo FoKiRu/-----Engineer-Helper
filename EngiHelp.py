@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.4.17"
+SCRIPT_VERSION = "v1.9.4.19"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -1844,13 +1844,10 @@ def change_rk_version():
     ), justify="left").pack(padx=10, pady=(10, 5))
 
     # Блок с директорией поиска версий
-    dir_frame = tk.Frame(frame)
-    dir_frame.pack(fill="x", padx=10, pady=(5, 0))
+    tk.Label(frame, text="Путь к папке с версиями из ZIP-архива:", anchor="w").pack(anchor="w", padx=10, pady=(8, 0))
 
-    tk.Label(dir_frame, text="Папка поиска версий:", anchor="w").pack(anchor="w")
-
-    dir_input_frame = tk.Frame(dir_frame)
-    dir_input_frame.pack(fill="x", pady=(3, 0))
+    dir_input_frame = tk.Frame(frame)
+    dir_input_frame.pack(fill="x", padx=10, pady=(3, 0))
 
     dir_entry = tk.Entry(dir_input_frame, textvariable=search_dir_var, width=40)
     dir_entry.pack(side="left", fill="x", expand=True)
@@ -1894,14 +1891,14 @@ def change_rk_version():
     tk.Button(dir_input_frame, text="Образ", command=on_browse_version_dir, width=6).pack(side="left", padx=(5, 0))
 
     # Подсказка о выборе версии
-    tk.Label(frame, text="\nВыберите версию для переноса базы:", justify="left").pack(padx=10, pady=(5, 0))
+    tk.Label(frame, text="Выберите версию для переноса базы:", anchor="w").pack(anchor="w", padx=10, pady=(8, 0))
 
     version_var = tk.StringVar()
     version_combo = ttk.Combobox(
         frame, textvariable=version_var,
         values=other_versions, state="readonly", width=30
     )
-    version_combo.pack(padx=10, pady=5)
+    version_combo.pack(padx=10, pady=(5, 0))
     if other_versions:
         version_combo.current(0)
 
@@ -1920,7 +1917,7 @@ def change_rk_version():
         perform_version_change(selected_task_id, current_version, target_version, target_dir)
 
     btn_frame = tk.Frame(frame)
-    btn_frame.pack(pady=10)
+    btn_frame.pack(pady=(5, 10))
     tk.Button(btn_frame, text="Перенести", command=on_confirm, width=12).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=select_win.destroy, width=12).pack(side="left", padx=5)
 
@@ -2336,6 +2333,100 @@ def apply_task_version(task_id, selected_version):
     on_check()
 
 
+def create_task_for_version(task_id, version_path):
+    """
+    Создаёт новую задачу для указанной версии RK.
+    Копирует base, создаёт пустую MIDBASE, обновляет INI и сохраняет в JSON.
+    """
+    task_id = task_id.strip()
+    if not task_id:
+        return False, "Номер задачи не может быть пустым"
+
+    product_root = find_product_root(version_path)
+    if not product_root:
+        return False, "Не удалось определить корневую папку продукта"
+
+    base_path = os.path.join(product_root, "base")
+    if not os.path.exists(base_path):
+        return False, f"Папка base не найдена: {base_path}"
+
+    # Проверяем блокировку refsrv.exe
+    refsrv_running = any(
+        p.info['name'].lower() == "refsrv.exe"
+        for p in psutil.process_iter(['name'])
+    )
+
+    if refsrv_running:
+        test_file = os.path.join(base_path, "rk7.udb")
+        if os.path.exists(test_file):
+            try:
+                shutil.copy2(test_file, os.path.join(product_root, "rk7.udb.test"))
+                os.remove(os.path.join(product_root, "rk7.udb.test"))
+            except PermissionError:
+                return False, "Файлы в папке base заблокированы процессом refsrv.exe"
+            except Exception as e:
+                return False, f"Ошибка проверки блокировки: {e}"
+
+    # Проверяем, не существует ли уже задача с таким ID
+    data = load_data()
+    tasks = data.get("tasks", {})
+    if task_id in tasks:
+        return False, f"Задача {task_id} уже существует"
+
+    # === Папка {task_id}/base ===
+    task_folder = os.path.join(product_root, task_id)
+    new_base_path = os.path.join(task_folder, "base")
+
+    if os.path.exists(new_base_path):
+        return False, f"Папка {new_base_path} уже существует"
+
+    try:
+        shutil.copytree(base_path, new_base_path)
+    except Exception as e:
+        return False, f"Не удалось скопировать папку base: {e}"
+
+    # === Папка {task_id}/MIDBASE - ВСЕГДА СОЗДАЁТСЯ ПУСТОЙ ===
+    midbase_path = os.path.join(task_folder, "MIDBASE")
+    midbase_ini_name = os.path.join(task_id, "MIDBASE")
+
+    try:
+        os.makedirs(midbase_path, exist_ok=True)
+    except Exception as e:
+        return False, f"Не удалось создать папку MIDBASE: {e}"
+
+    # Обновляем BasePath в RKEEPER.INI
+    update_rkeeper_ini_basepath(version_path, midbase_ini_name)
+
+    # Собираем параметры INI
+    ini_settings = get_ini_settings(version_path)
+
+    # Сохраняем в JSON
+    task_entry = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "base_path": new_base_path.replace("\\", "/"),
+        "midbase_path": midbase_path.replace("\\", "/"),
+        "ini_path": version_path.replace("\\", "/"),
+        "status": "copied",
+        "ini_settings": ini_settings,
+        "versions": {}
+    }
+
+    tasks[task_id] = task_entry
+    tasks = {task_id: tasks[task_id], **{k: v for k, v in tasks.items() if k != task_id}}
+    data["tasks"] = tasks
+    save_data(data)
+
+    # Обновляем rk7srv.INI
+    base_dir = os.path.join(task_id, "base")
+    rk7srv_ini_path = os.path.join(version_path, "rk7srv.INI")
+    update_rk7srv_ini(rk7srv_ini_path, base_dir)
+
+    # Создаём ярлыки
+    create_task_shortcuts(task_folder, version_path)
+
+    return True, f"Задача {task_id} создана"
+
+
 def show_task_selection_dialog(version_path, task_list, fallback_task_id=None):
     """
     Диалог выбора задачи при выборе версии RK.
@@ -2364,7 +2455,7 @@ def show_task_selection_dialog(version_path, task_list, fallback_task_id=None):
 
     tk.Label(frame, text=(
         f"Версия {version_label} имеет несколько задач.\n"
-        f"Выберите задачу для работы:"
+        f"Выберите задачу или создайте новую:"
     ), justify="center").pack(padx=10, pady=(10, 5))
 
     task_var_local = tk.StringVar()
@@ -2392,6 +2483,38 @@ def show_task_selection_dialog(version_path, task_list, fallback_task_id=None):
             anchor="w",
             font=("TkDefaultFont", 9, "bold" if tid == current_task else "normal")
         ).pack(anchor="w", pady=2, fill="x")
+
+    # Блок для создания новой задачи
+    new_task_frame = tk.Frame(frame)
+    new_task_frame.pack(fill="x", padx=10, pady=(10, 5))
+
+    tk.Label(new_task_frame, text="Или создайте новую задачу:", anchor="w").pack(anchor="w", pady=(0, 3))
+
+    new_task_input_frame = tk.Frame(new_task_frame)
+    new_task_input_frame.pack(fill="x")
+
+    new_task_var = tk.StringVar()
+    new_task_entry = tk.Entry(new_task_input_frame, textvariable=new_task_var, width=20)
+    new_task_entry.pack(side="left", fill="x", expand=True)
+
+    def on_create_new_task():
+        new_task_id = new_task_var.get().strip()
+        if not new_task_id:
+            centered_warning("Предупреждение", "Введите номер задачи")
+            return
+
+        success, message = create_task_for_version(new_task_id, version_path)
+        if success:
+            # Обновляем список задач в диалоге
+            task_id_combobox['values'] = load_task_ids()
+            select_win.destroy()
+            # Загружаем созданную задачу
+            _forced_version = version_key
+            task_id_var.set(new_task_id)
+        else:
+            centered_warning("Ошибка", message)
+
+    tk.Button(new_task_input_frame, text="Создать", command=on_create_new_task, width=8).pack(side="left", padx=(5, 0))
 
     def _load_task(selected_tid):
         """Применяет задачу: через trace, либо напрямую если значение не изменилось."""
