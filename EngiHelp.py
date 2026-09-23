@@ -28,7 +28,7 @@ import queue #Улучшенная проверка refsrv.exe
 
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.4.19"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v1.9.4.21"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -2380,10 +2380,27 @@ def create_task_for_version(task_id, version_path):
     if os.path.exists(new_base_path):
         return False, f"Папка {new_base_path} уже существует"
 
+    # Список файлов и папок, которые нужно скопировать из base (без rk7.udb)
+    files_to_copy = [
+        "drvlocalize", "workmods", "dealerpresets.udb",
+        "upgradedevices.abs", "upgradepresets.abs"
+    ]
+
     try:
-        shutil.copytree(base_path, new_base_path)
+        # Создаем папку new_base_path
+        os.makedirs(new_base_path, exist_ok=True)
+
+        # Копируем только нужные файлы и папки
+        for item in files_to_copy:
+            src_item = os.path.join(base_path, item)
+            dst_item = os.path.join(new_base_path, item)
+            if os.path.exists(src_item):
+                if os.path.isdir(src_item):
+                    shutil.copytree(src_item, dst_item)
+                else:
+                    shutil.copy2(src_item, dst_item)
     except Exception as e:
-        return False, f"Не удалось скопировать папку base: {e}"
+        return False, f"Не удалось скопировать файлы base: {e}"
 
     # === Папка {task_id}/MIDBASE - ВСЕГДА СОЗДАЁТСЯ ПУСТОЙ ===
     midbase_path = os.path.join(task_folder, "MIDBASE")
@@ -3051,10 +3068,27 @@ def save_task_id():
         else:
             return
 
+    # Список файлов и папок, которые нужно скопировать из base (без rk7.udb)
+    files_to_copy = [
+        "drvlocalize", "workmods", "dealerpresets.udb",
+        "upgradedevices.abs", "upgradepresets.abs"
+    ]
+
     try:
-        shutil.copytree(base_path, new_base_path)
+        # Создаем папку new_base_path
+        os.makedirs(new_base_path, exist_ok=True)
+
+        # Копируем только нужные файлы и папки
+        for item in files_to_copy:
+            src_item = os.path.join(base_path, item)
+            dst_item = os.path.join(new_base_path, item)
+            if os.path.exists(src_item):
+                if os.path.isdir(src_item):
+                    shutil.copytree(src_item, dst_item)
+                else:
+                    shutil.copy2(src_item, dst_item)
     except Exception as e:
-        centered_error("Ошибка", f"Не удалось скопировать папку base:\n{e}")
+        centered_error("Ошибка", f"Не удалось скопировать файлы base:\n{e}")
         return
 
     # === Папка {task_id}/MIDBASE - ВСЕГДА СОЗДАЁТСЯ ПУСТОЙ ===
@@ -4192,7 +4226,7 @@ def start_wincash_only():
         centered_error("Ошибка", f"Файл не найден:\n{bat_path}")
         return
     try:
-        subprocess.run([bat_path], shell=True, cwd=ini_path)
+        subprocess.Popen([bat_path], shell=True, cwd=ini_path)
     except Exception as e:
         centered_error("Ошибка запуска", str(e))
 
@@ -4200,8 +4234,7 @@ def start_wincash_only():
 # ======================= Запуск MidServ + WinCash =======================
 def run_midserv_and_wincash():
     start_midserv_only()
-    time.sleep(1.5)
-    start_wincash_only()
+    root.after(1500, start_wincash_only)
 
 # ======================= Закрыть процес =======================
 def kill_midserv_process():
