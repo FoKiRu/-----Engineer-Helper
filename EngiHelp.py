@@ -25,10 +25,11 @@ import ctypes
 import webbrowser
 import keyboard
 import queue #Улучшенная проверка refsrv.exe
-
+import webbrowser #Отображения ссылки в тексте
+import tkinter.font as tkfont
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.4.21"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v1.9.5.25"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -633,6 +634,45 @@ def apply_port(ini_path_val, port):
 
 # ======================= Cloud RK7man =======================
 CLOUD_RK7MAN_PATTERN = re.compile(r'^([A-Za-z0-9_]+)\s*=\s*([^\s:=]+):(\d{1,5})$')
+CLOUD_CONNECTIONS_FILE = "cloud_connections.txt"
+MAX_SAVED_CONNECTIONS = 5
+
+def get_cloud_connections_file_path():
+    """Возвращает путь к файлу cloud_connections.txt в корне папки версии RK (рядом с INI)."""
+    return os.path.join(ini_path, CLOUD_CONNECTIONS_FILE)
+
+def load_saved_cloud_connections():
+    """Загружает сохранённые строки подключения из файла (максимум 5)."""
+    file_path = get_cloud_connections_file_path()
+    if not os.path.isfile(file_path):
+        return []
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = [line.strip() for line in f if line.strip()]
+            return lines[:MAX_SAVED_CONNECTIONS]
+    except Exception:
+        return []
+
+def save_cloud_connection(connection_string):
+    """Сохраняет строку подключения, удаляя дубликаты и оставляя 5 последних."""
+    file_path = get_cloud_connections_file_path()
+    connections = load_saved_cloud_connections()
+
+    # Удаляем дубликат если есть
+    connections = [c for c in connections if c != connection_string]
+
+    # Добавляем в начало (новейшее первым)
+    connections.insert(0, connection_string)
+
+    # Ограничиваем до 5
+    connections = connections[:MAX_SAVED_CONNECTIONS]
+
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(connections))
+    except Exception as e:
+        print(f"[WARN] Не удалось сохранить подключение: {e}")
+
 
 def parse_cloud_rk7man_string(raw):
     """Разбирает строку вида RK7SRV_622020001=srv01.rkcloud.ucs.ru:50072.
@@ -749,16 +789,17 @@ def apply_cloud_rk7man_config(ini_path_val, server_name, host, port):
     except Exception as e:
         return None, str(e)
 
-def launch_cloud_rk7man(tmp_ini_path):
+def launch_cloud_rk7man(tmp_ini_path, version_ini_path=None):
     """Запускает rk7man.exe напрямую с временным ini-файлом в качестве аргумента,
     без изменения реального rk7man.ini. Рабочая директория — там, где лежит rk7man.exe,
     иначе исполняемый файл выдаёт ошибку."""
-    exe_path = os.path.join(ini_path, "rk7man.exe")
+    target_ini = version_ini_path if version_ini_path else ini_path
+    exe_path = os.path.join(target_ini, "rk7man.exe")
     if not os.path.isfile(exe_path):
         centered_error("Ошибка", f"Файл не найден:\n{exe_path}")
         return
 
-    ini_path_norm = os.path.normpath(ini_path).lower()
+    ini_path_norm = os.path.normpath(target_ini).lower()
     for proc, exe_dir in _get_process_by_name('rk7man.exe'):
         if exe_dir == ini_path_norm:
             try:
@@ -769,7 +810,7 @@ def launch_cloud_rk7man(tmp_ini_path):
     time.sleep(0.5)
 
     try:
-        proc = subprocess.Popen([exe_path, tmp_ini_path], cwd=ini_path)
+        proc = subprocess.Popen([exe_path, tmp_ini_path], cwd=target_ini)
     except Exception as e:
         centered_error("Ошибка запуска", str(e))
         return
@@ -802,26 +843,154 @@ def cloud_rk7man_dialog():
     frame = tk.Frame(win)
     frame.pack(fill="both", expand=True)
 
-    tk.Label(
-        frame,
-        text="Введите строку подключения к облачному серверу\n(строку можно взять у бота):",
-        justify="left"
-    ).pack(padx=15, pady=(15, 5))
+    saved_connections = load_saved_cloud_connections()
+    history_values = [""] + saved_connections
 
     tk.Label(
         frame,
-        text="Шаблон: ИМЯ_СЕРВЕРА=хост:порт",
+        text="Введите строку подключения к облачному серверу",
+        justify="center"
+    ).pack(padx=15, pady=(15, 0))
+
+    hint = tk.Frame(frame)
+    hint.pack(padx=15, pady=(0, 5))
+
+    link_font = tkfont.nametofont("TkDefaultFont").copy()
+    link_font.configure(underline=True)
+
+    tk.Label(hint, text="(строку можно взять у").pack(side="left")
+    link = tk.Label(hint, text="бота", fg="blue", cursor="hand2", font=link_font)
+    link.pack(side="left")
+    link.bind("<Button-1>", lambda e: webbrowser.open("https://t.me/rkcloud_bot"))
+    tk.Label(hint, text="):").pack(side="left")
+
+    tk.Label(
+        frame,
+        text="Шаблон: ИМЯ_СЕРВЕРА=хост:порт  |  История подключений в списке",
         justify="left",
         fg="gray40",
         font=("TkDefaultFont", 8)
-    ).pack(padx=15, pady=(0, 8))
+    ).pack(padx=15, pady=(0, 5))
 
-    entry_var = tk.StringVar()
-    entry = tk.Entry(frame, textvariable=entry_var, width=45)
-    entry.pack(padx=15, pady=(0, 10))
+    connection_var = tk.StringVar()
+    connection_combo = ttk.Combobox(
+        frame,
+        textvariable=connection_var,
+        values=history_values,
+        state="normal",
+        width=55
+    )
+    connection_combo.pack(padx=15, pady=(0, 5))
+
+    def on_connection_select(event):
+        """При выборе из шторки — подставляем значение."""
+        selected = connection_var.get()
+        if selected:
+            run_btn.focus_set()
+
+    connection_combo.bind("<<ComboboxSelected>>", on_connection_select)
+
+    def on_version_flag_change():
+        """Обновляем состояние полей при смене флага."""
+        is_disabled = use_current_version_var.get()
+        version_combo.config(state="disabled" if is_disabled else "readonly")
+        browse_btn.config(state="disabled" if is_disabled else "normal")
+        if is_disabled:
+            current_ver = extract_rk_version_from_path(ini_path)
+            version_var.set(current_ver if current_ver else "")
+        else:
+            version_var.set("")
+            connection_var.set("")
+
+    # Чекбокс для выбора версии запуска
+    use_current_version_var = tk.BooleanVar(value=True)
+
+    version_row_frame = tk.Frame(frame)
+    version_row_frame.pack(fill="x", padx=15, pady=(5, 5), anchor="w")
+
+    use_current_version_var.trace_add("write", lambda *_: on_version_flag_change())
+
+    version_checkbox = tk.Checkbutton(
+        version_row_frame,
+        text="Запускать rk7man с текущей выбранной версии",
+        variable=use_current_version_var,
+        justify="left"
+    )
+    version_checkbox.pack(side="left")
+
+    # Поле выбора версии
+    version_input_frame = tk.Frame(frame)
+    version_input_frame.pack(fill="x", padx=15, pady=(0, 10))
+
+    tk.Label(version_input_frame, text="Версия RK:", anchor="w").pack(side="left")
+
+    def on_browse_version():
+        """Открывает диалог выбора папки с версиями."""
+        new_dir = filedialog.askdirectory(
+            title="Выберите папку с версиями RK",
+            initialdir=os.path.dirname(os.path.dirname(ini_path))
+        )
+        if new_dir:
+            new_versions = []
+            try:
+                for item in os.listdir(new_dir):
+                    full_path = os.path.join(new_dir, item)
+                    if os.path.isdir(full_path):
+                        match = re.match(r'^INST(.+)$', item, re.IGNORECASE)
+                        if match:
+                            bin_win = os.path.join(full_path, "bin", "win")
+                            if os.path.isdir(bin_win):
+                                new_versions.append(match.group(1))
+            except Exception as e:
+                print(f"Ошибка сканирования: {e}")
+
+            if new_versions:
+                new_versions = sorted(new_versions, reverse=True)
+                version_combo['values'] = new_versions
+                version_combo.current(0)
+            else:
+                centered_info("Информация", "Версии RK не найдены в выбранной папке.")
+
+    browse_btn = tk.Button(version_input_frame, text="Обзор", command=on_browse_version, width=6, state="disabled")
+    browse_btn.pack(side="right", padx=(5, 0))
+
+    # Шторка с версиями
+    version_var = tk.StringVar()
+    version_combo = ttk.Combobox(
+        version_input_frame,
+        textvariable=version_var,
+        values=[],
+        state="disabled",
+        width=20
+    )
+    version_combo.pack(side="left", padx=(5, 0), fill="x", expand=True)
+
+    def on_version_combo_select(event):
+        """При выборе версии из шторки."""
+        pass  # Можно добавить дополнительную логику при необходимости
+
+    version_combo.bind("<<ComboboxSelected>>", on_version_combo_select)
+
+    # Инициализация
+    on_version_flag_change()
+
+    def get_target_ini_path():
+        """Возвращает ini_path для запуска rk7man."""
+        if use_current_version_var.get():
+            return ini_path
+        target_ver = version_var.get()
+        if not target_ver:
+            centered_error("Ошибка", "Выберите версию RK для запуска.")
+            return None
+        parent_dir = os.path.dirname(os.path.dirname(ini_path))
+        target_path = os.path.join(parent_dir, f"INST{target_ver}", "bin", "win")
+        if os.path.isdir(target_path):
+            return target_path
+        centered_error("Ошибка", f"Папка версии не найдена:\n{target_path}")
+        return None
 
     def on_run():
-        parsed = parse_cloud_rk7man_string(entry_var.get())
+        parsed = parse_cloud_rk7man_string(connection_var.get())
         if not parsed:
             centered_error(
                 "Ошибка",
@@ -831,12 +1000,37 @@ def cloud_rk7man_dialog():
             )
             return
         server_name, host, port = parsed
+        connection_string = connection_var.get().strip()
+
+        save_cloud_connection(connection_string)
+
+        target_ini = get_target_ini_path()
+        if target_ini is None:
+            return
+
         win.destroy()
-        tmp_ini_path, err = apply_cloud_rk7man_config(ini_path, server_name, host, port)
+        tmp_ini_path, err = apply_cloud_rk7man_config(target_ini, server_name, host, port)
         if not tmp_ini_path:
             centered_error("Ошибка", f"Не удалось подготовить настройки:\n{err}")
             return
-        launch_cloud_rk7man(tmp_ini_path)
+        launch_cloud_rk7man(tmp_ini_path, target_ini)
+
+    def on_save():
+        """Сохраняет подключение без запуска."""
+        parsed = parse_cloud_rk7man_string(connection_var.get())
+        if not parsed:
+            centered_error(
+                "Ошибка",
+                "Строка не подходит по формату.\n"
+                "Ожидается: ИМЯ_СЕРВЕРА=хост:порт\n"
+                "Пример: RK7SRV_622020001=srv01.rkcloud.ucs.ru:50072"
+            )
+            return
+        connection_string = connection_var.get().strip()
+        save_cloud_connection(connection_string)
+        connection_combo['values'] = [""] + load_saved_cloud_connections()
+        connection_combo.set("")
+        centered_info("Сохранено", "Подключение сохранено в историю.")
 
     def on_enter_key(event):
         on_run()
@@ -847,6 +1041,8 @@ def cloud_rk7man_dialog():
     btn_frame.pack(pady=(0, 15))
     run_btn = tk.Button(btn_frame, text="Запустить", command=on_run, width=12)
     run_btn.pack(side="left", padx=5)
+    save_btn = tk.Button(btn_frame, text="Сохранить", command=on_save, width=12)
+    save_btn.pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=win.destroy, width=12).pack(side="left", padx=5)
 
     # Если в буфере обмена лежит строка нужного формата — сразу подставляем её
@@ -858,11 +1054,11 @@ def cloud_rk7man_dialog():
         clipboard_text = ""
 
     if parse_cloud_rk7man_string(clipboard_text):
-        entry_var.set(clipboard_text.strip())
+        connection_var.set(clipboard_text.strip())
         run_btn.focus_set()
     else:
-        entry.focus_set()
-        entry.icursor(tk.END)
+        connection_combo.focus_set()
+        connection_combo.icursor(tk.END)
 
     _center_window(win)
 
