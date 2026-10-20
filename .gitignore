@@ -1,33 +1,34 @@
-0
-/ini.7z
-/rk7srv.INI
-/rk7srv.INI.bak
-/RKEEPER.INI
-/RKEEPER.INI.bak
-/wincash.ini
-/wincash.ini.bak
-/config.json
-/Архив
-/Cloud_online_logs.mp4
-wincash.ini
+# Python
+__pycache__/
+*.pyc
+
+# Сборка (в репозитории остаётся только dist/EngiHelp.exe — нужен для автообновления)
 /build
-/dist/config.json
-/dist/StackDmp.txt
+/build.py
 /EngiHelp.spec
+/dist/*
+!/dist/EngiHelp.exe
+
+# Иконки
+/.ico/
 /Иконка EngiHelp.png
 /Иконка EngiHelp.ico
-/StackDmp.txt
-/.ico/
+
+# Локальные конфиги и INI
+/config.json
+/ini.7z
+*.ini
+*.INI
+*.bak
+
+# Логи и дампы
+StackDmp.txt
+
+# Архив, заметки, разовые скрипты
+/Архив
+/Cloud_online_logs.mp4
 update_storehouse.au3
 sasjk.pas
-build.py
-__pycache__/EngiHelp.cpython-313.pyc
 result.sql
 format_visits.py
 Скрипт для исправление визитов с предоплатами.py
-2026-10-19-120627-this-session-is-being-continued-from-a-previous-c.txt
-2026-10-19-153425-фукнции не имопртированы.txt
-conversation-2026-10-19-110201.txt
-План рефакторинга кода.txt
-Попытка 2 рефакторинга fable.txt
-Попытка рефакторинга через fable.txt
