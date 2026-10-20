@@ -46,7 +46,7 @@ from modules.task_manager import create_task_for_version, get_task_label_for_dir
 from modules.version_updater import check_rk_updates, download_version, extract_zip
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.9.31"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v1.9.9.32"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (

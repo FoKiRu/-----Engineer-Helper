@@ -17,42 +17,49 @@ import psutil
 from .dialogs import _center_window, centered_error, centered_info
 from .process_utils import get_process_by_name
 from .task_manager import extract_rk_version_from_path
+from .data_manager import load_data, save_data
 from . import (
     CLOUD_RK7MAN_PATTERN, CLOUD_CONNECTIONS_FILE, MAX_SAVED_CONNECTIONS
 )
 
-# ======================= Файлы подключений =======================
+# ======================= История подключений =======================
+# История хранится в EngiHelp_data.json (settings.cloud_connections) и общая
+# для всех версий RK. Старый cloud_connections.txt в папке версии подхватывается
+# один раз при первом обращении.
 
-def get_cloud_connections_file_path(ini_path):
-    """Возвращает путь к файлу cloud_connections.txt в корне папки версии RK."""
-    return os.path.join(ini_path, CLOUD_CONNECTIONS_FILE)
-
-def load_saved_cloud_connections(ini_path):
-    """Загружает сохранённые строки подключения из файла (максимум 5)."""
-    file_path = get_cloud_connections_file_path(ini_path)
+def _load_legacy_cloud_connections(ini_path):
+    """Читает строки из старого cloud_connections.txt в папке версии RK."""
+    if not ini_path:
+        return []
+    file_path = os.path.join(ini_path, CLOUD_CONNECTIONS_FILE)
     if not os.path.isfile(file_path):
         return []
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            lines = [line.strip() for line in f if line.strip()]
-            return lines[:MAX_SAVED_CONNECTIONS]
+            return [line.strip() for line in f if line.strip()]
     except Exception:
         return []
 
-def save_cloud_connection(ini_path, connection_string):
-    """Сохраняет строку подключения, удаляя дубликаты и оставляя 5 последних."""
-    file_path = get_cloud_connections_file_path(ini_path)
-    connections = load_saved_cloud_connections(ini_path)
+def load_saved_cloud_connections(ini_path=None):
+    """Возвращает сохранённые строки подключения (не более MAX_SAVED_CONNECTIONS)."""
+    data = load_data()
+    connections = data["settings"].get("cloud_connections", [])
+    if not connections:
+        legacy = _load_legacy_cloud_connections(ini_path)
+        if legacy:
+            connections = list(dict.fromkeys(legacy))[:MAX_SAVED_CONNECTIONS]
+            data["settings"]["cloud_connections"] = connections
+            save_data(data)
+    return connections[:MAX_SAVED_CONNECTIONS]
 
+def save_cloud_connection(connection_string):
+    """Ставит строку подключения первой в историю, убирая дубликат и оставляя 5 последних."""
+    data = load_data()
+    connections = data["settings"].get("cloud_connections", [])
     connections = [c for c in connections if c != connection_string]
     connections.insert(0, connection_string)
-    connections = connections[:MAX_SAVED_CONNECTIONS]
-
-    try:
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(connections))
-    except Exception as e:
-        print(f"[WARN] Не удалось сохранить подключение: {e}")
+    data["settings"]["cloud_connections"] = connections[:MAX_SAVED_CONNECTIONS]
+    save_data(data)
 
 # ======================= Парсинг =======================
 
@@ -173,7 +180,7 @@ def apply_cloud_rk7man_config(ini_path, server_name, host, port):
 def launch_cloud_rk7man(tmp_ini_path, target_ini, keep_cloud_files):
     """Запускает rk7man.exe напрямую с временным ini-файлом в качестве аргумента,
     без изменения реального rk7man.ini. Рабочая директория — там, где лежит rk7man.exe,
-    иначе исполняемый файл выдаёт ошибку."""
+    иначе исполняемый файл выдаёт ошибку. Возвращает True, если процесс запущен."""
     exe_path = os.path.join(target_ini, "rk7man.exe")
     if not os.path.isfile(exe_path):
         centered_error("Ошибка", f"Файл не найден:\n{exe_path}")
@@ -193,7 +200,7 @@ def launch_cloud_rk7man(tmp_ini_path, target_ini, keep_cloud_files):
         proc = subprocess.Popen([exe_path, tmp_ini_path], cwd=target_ini)
     except Exception as e:
         centered_error("Ошибка запуска", str(e))
-        return
+        return False
 
     if not keep_cloud_files:
         def _cleanup_after_exit():
@@ -203,6 +210,7 @@ def launch_cloud_rk7man(tmp_ini_path, target_ini, keep_cloud_files):
             except OSError:
                 pass
         threading.Thread(target=_cleanup_after_exit, daemon=True).start()
+    return True
 
 # ======================= UI диалог =======================
 
@@ -226,7 +234,6 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None):
     frame.pack(fill="both", expand=True)
 
     saved_connections = load_saved_cloud_connections(ini_path)
-    history_values = [""] + saved_connections
 
     tk.Label(
         frame,
@@ -248,7 +255,7 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None):
 
     tk.Label(
         frame,
-        text="Шаблон: ИМЯ_СЕРВЕРА=хост:порт  |  История подключений в списке",
+        text=f"Шаблон: ИМЯ_СЕРВЕРА=хост:порт  |  В списке — {MAX_SAVED_CONNECTIONS} последних запусков",
         justify="left",
         fg="gray40",
         font=("TkDefaultFont", 8)
@@ -258,7 +265,7 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None):
     connection_combo = ttk.Combobox(
         frame,
         textvariable=connection_var,
-        values=history_values,
+        values=saved_connections,
         state="normal",
         width=55
     )
@@ -384,8 +391,6 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None):
         server_name, host, port = parsed
         connection_string = connection_var.get().strip()
 
-        save_cloud_connection(ini_path, connection_string)
-
         target_ini = get_target_ini_path()
         if target_ini is None:
             return
@@ -395,24 +400,8 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None):
         if not tmp_ini_path:
             centered_error("Ошибка", f"Не удалось подготовить настройки:\n{err}")
             return
-        launch_cloud_rk7man(tmp_ini_path, target_ini, keep_cloud_files_var.get())
-
-    def on_save():
-        """Сохраняет подключение без запуска."""
-        parsed = parse_cloud_rk7man_string(connection_var.get())
-        if not parsed:
-            centered_error(
-                "Ошибка",
-                "Строка не подходит по формату.\n"
-                "Ожидается: ИМЯ_СЕРВЕРА=хост:порт\n"
-                "Пример: RK7SRV_622020001=srv01.rkcloud.ucs.ru:50072"
-            )
-            return
-        connection_string = connection_var.get().strip()
-        save_cloud_connection(ini_path, connection_string)
-        connection_combo['values'] = [""] + load_saved_cloud_connections(ini_path)
-        connection_combo.set("")
-        centered_info("Сохранено", "Подключение сохранено в историю.")
+        if launch_cloud_rk7man(tmp_ini_path, target_ini, keep_cloud_files_var.get()):
+            save_cloud_connection(connection_string)
 
     def on_enter_key(event):
         on_run()
@@ -423,8 +412,6 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None):
     btn_frame.pack(pady=(0, 15))
     run_btn = tk.Button(btn_frame, text="Запустить", command=on_run, width=12)
     run_btn.pack(side="left", padx=5)
-    save_btn = tk.Button(btn_frame, text="Сохранить", command=on_save, width=12)
-    save_btn.pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=win.destroy, width=12).pack(side="left", padx=5)
 
     # Если в буфере обмена лежит строка нужного формата — сразу подставляем её
