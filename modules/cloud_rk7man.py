@@ -3,11 +3,20 @@
 
 import os
 import re
-import shutil
 import tempfile
 import threading
 import subprocess
 import time
+import webbrowser
+import tkinter as tk
+import tkinter.font as tkfont
+from tkinter import ttk, filedialog
+
+import psutil
+
+from .dialogs import _center_window, centered_error, centered_info
+from .process_utils import get_process_by_name
+from .task_manager import extract_rk_version_from_path
 from . import (
     CLOUD_RK7MAN_PATTERN, CLOUD_CONNECTIONS_FILE, MAX_SAVED_CONNECTIONS
 )
@@ -161,30 +170,30 @@ def apply_cloud_rk7man_config(ini_path, server_name, host, port):
 
 # ======================= Запуск =======================
 
-def launch_cloud_rk7man(tmp_ini_path, version_ini_path, keep_cloud_files):
-    """Запускает rk7man.exe напрямую с временным ini-файлом."""
-    target_ini = version_ini_path
+def launch_cloud_rk7man(tmp_ini_path, target_ini, keep_cloud_files):
+    """Запускает rk7man.exe напрямую с временным ini-файлом в качестве аргумента,
+    без изменения реального rk7man.ini. Рабочая директория — там, где лежит rk7man.exe,
+    иначе исполняемый файл выдаёт ошибку."""
     exe_path = os.path.join(target_ini, "rk7man.exe")
     if not os.path.isfile(exe_path):
-        return False, f"Файл не найден:\n{exe_path}"
+        centered_error("Ошибка", f"Файл не найден:\n{exe_path}")
+        return
 
-    import psutil
     ini_path_norm = os.path.normpath(target_ini).lower()
-    for proc in psutil.process_iter(['pid', 'name']):
-        try:
-            if proc.info['name'].lower() == 'rk7man.exe':
-                exe_dir = os.path.normpath(os.path.dirname(proc.exe())).lower()
-                if exe_dir == ini_path_norm:
-                    proc.terminate()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+    for proc, exe_dir in get_process_by_name('rk7man.exe'):
+        if exe_dir == ini_path_norm:
+            try:
+                proc.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
 
     time.sleep(0.5)
 
     try:
         proc = subprocess.Popen([exe_path, tmp_ini_path], cwd=target_ini)
     except Exception as e:
-        return False, str(e)
+        centered_error("Ошибка запуска", str(e))
+        return
 
     if not keep_cloud_files:
         def _cleanup_after_exit():
@@ -195,23 +204,13 @@ def launch_cloud_rk7man(tmp_ini_path, version_ini_path, keep_cloud_files):
                 pass
         threading.Thread(target=_cleanup_after_exit, daemon=True).start()
 
-    return True, None
-
 # ======================= UI диалог =======================
 
-def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None, extract_rk_version_func=None):
+def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None):
     """Окно для ввода строки подключения к облачному серверу и запуска rk7man.exe."""
-    from functools import partial
-    import tkinter as tk
-    import tkinter.ttk as ttk
-    import tkinter.font as tkfont
-    import webbrowser
-
     if not ini_path or not os.path.isfile(os.path.join(ini_path, "rk7man.ini")):
+        centered_error("Ошибка", "Файл rk7man.ini не найден в текущем пути.")
         return
-
-    # Импортируем dialogs для работы с ними
-    from .ui import centered_error, centered_info
 
     win = tk.Toplevel(root)
     win.withdraw()
@@ -229,7 +228,11 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None, ex
     saved_connections = load_saved_cloud_connections(ini_path)
     history_values = [""] + saved_connections
 
-    tk.Label(frame, text="Введите строку подключения к облачному серверу", justify="center").pack(padx=15, pady=(15, 0))
+    tk.Label(
+        frame,
+        text="Введите строку подключения к облачному серверу",
+        justify="center"
+    ).pack(padx=15, pady=(15, 0))
 
     hint = tk.Frame(frame)
     hint.pack(padx=15, pady=(0, 5))
@@ -243,23 +246,31 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None, ex
     link.bind("<Button-1>", lambda e: webbrowser.open("https://t.me/rkcloud_bot"))
     tk.Label(hint, text="):").pack(side="left")
 
-    tk.Label(frame, text="Шаблон: ИМЯ_СЕРВЕРА=хост:порт  |  История подключений в списке",
-             justify="left", fg="gray40", font=("TkDefaultFont", 8)).pack(padx=15, pady=(0, 5))
+    tk.Label(
+        frame,
+        text="Шаблон: ИМЯ_СЕРВЕРА=хост:порт  |  История подключений в списке",
+        justify="left",
+        fg="gray40",
+        font=("TkDefaultFont", 8)
+    ).pack(padx=15, pady=(0, 5))
 
     connection_var = tk.StringVar()
-    connection_combo = ttk.Combobox(frame, textvariable=connection_var, values=history_values, state="normal", width=55)
+    connection_combo = ttk.Combobox(
+        frame,
+        textvariable=connection_var,
+        values=history_values,
+        state="normal",
+        width=55
+    )
     connection_combo.pack(padx=15, pady=(0, 5))
 
     def on_connection_select(event):
+        """При выборе из шторки — подставляем значение."""
         selected = connection_var.get()
         if selected:
             run_btn.focus_set()
 
     connection_combo.bind("<<ComboboxSelected>>", on_connection_select)
-
-    # Чекбокс для выбора версии запуска
-    use_current_version_var = tk.BooleanVar(value=True)
-    version_var = tk.StringVar()
 
     def on_version_flag_change():
         """Обновляем состояние полей при смене флага."""
@@ -267,17 +278,19 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None, ex
         version_combo.config(state="disabled" if is_disabled else "readonly")
         browse_btn.config(state="disabled" if is_disabled else "normal")
         if is_disabled:
-            if extract_rk_version_func:
-                current_ver = extract_rk_version_func(ini_path)
-                version_var.set(current_ver if current_ver else "")
+            current_ver = extract_rk_version_from_path(ini_path)
+            version_var.set(current_ver if current_ver else "")
         else:
             version_var.set("")
             connection_var.set("")
 
-    use_current_version_var.trace_add("write", lambda *_: on_version_flag_change())
+    # Чекбокс для выбора версии запуска
+    use_current_version_var = tk.BooleanVar(value=True)
 
     version_row_frame = tk.Frame(frame)
     version_row_frame.pack(fill="x", padx=15, pady=(5, 5), anchor="w")
+
+    use_current_version_var.trace_add("write", lambda *_: on_version_flag_change())
 
     version_checkbox = tk.Checkbutton(
         version_row_frame,
@@ -287,6 +300,7 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None, ex
     )
     version_checkbox.pack(side="left")
 
+    # Поле выбора версии
     version_input_frame = tk.Frame(frame)
     version_input_frame.pack(fill="x", padx=15, pady=(0, 10))
 
@@ -294,7 +308,7 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None, ex
 
     def on_browse_version():
         """Открывает диалог выбора папки с версиями."""
-        new_dir = tk.filedialog.askdirectory(
+        new_dir = filedialog.askdirectory(
             title="Выберите папку с версиями RK",
             initialdir=os.path.dirname(os.path.dirname(ini_path))
         )
@@ -317,20 +331,29 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None, ex
                 version_combo['values'] = new_versions
                 version_combo.current(0)
             else:
-                centered_info(root, "Информация", "Версии RK не найдены в выбранной папке.")
+                centered_info("Информация", "Версии RK не найдены в выбранной папке.")
 
     browse_btn = tk.Button(version_input_frame, text="Обзор", command=on_browse_version, width=6, state="disabled")
     browse_btn.pack(side="right", padx=(5, 0))
 
+    # Шторка с версиями
+    version_var = tk.StringVar()
     version_combo = ttk.Combobox(
-        version_input_frame, textvariable=version_var, values=[], state="disabled", width=20
+        version_input_frame,
+        textvariable=version_var,
+        values=[],
+        state="disabled",
+        width=20
     )
     version_combo.pack(side="left", padx=(5, 0), fill="x", expand=True)
 
     def on_version_combo_select(event):
-        pass
+        """При выборе версии из шторки."""
+        pass  # Можно добавить дополнительную логику при необходимости
 
     version_combo.bind("<<ComboboxSelected>>", on_version_combo_select)
+
+    # Инициализация
     on_version_flag_change()
 
     def get_target_ini_path():
@@ -339,19 +362,20 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None, ex
             return ini_path
         target_ver = version_var.get()
         if not target_ver:
-            centered_error(root, "Ошибка", "Выберите версию RK для запуска.")
+            centered_error("Ошибка", "Выберите версию RK для запуска.")
             return None
         parent_dir = os.path.dirname(os.path.dirname(ini_path))
         target_path = os.path.join(parent_dir, f"INST{target_ver}", "bin", "win")
         if os.path.isdir(target_path):
             return target_path
-        centered_error(root, "Ошибка", f"Папка версии не найдена:\n{target_path}")
+        centered_error("Ошибка", f"Папка версии не найдена:\n{target_path}")
         return None
 
     def on_run():
         parsed = parse_cloud_rk7man_string(connection_var.get())
         if not parsed:
-            centered_error(root, "Ошибка",
+            centered_error(
+                "Ошибка",
                 "Строка не подходит по формату.\n"
                 "Ожидается: ИМЯ_СЕРВЕРА=хост:порт\n"
                 "Пример: RK7SRV_622020001=srv01.rkcloud.ucs.ru:50072"
@@ -369,17 +393,16 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None, ex
         win.destroy()
         tmp_ini_path, err = apply_cloud_rk7man_config(target_ini, server_name, host, port)
         if not tmp_ini_path:
-            centered_error(root, "Ошибка", f"Не удалось подготовить настройки:\n{err}")
+            centered_error("Ошибка", f"Не удалось подготовить настройки:\n{err}")
             return
-        success, err = launch_cloud_rk7man(tmp_ini_path, target_ini, keep_cloud_files_var.get())
-        if not success:
-            centered_error(root, "Ошибка", f"Не удалось запустить rk7man:\n{err}")
+        launch_cloud_rk7man(tmp_ini_path, target_ini, keep_cloud_files_var.get())
 
     def on_save():
         """Сохраняет подключение без запуска."""
         parsed = parse_cloud_rk7man_string(connection_var.get())
         if not parsed:
-            centered_error(root, "Ошибка",
+            centered_error(
+                "Ошибка",
                 "Строка не подходит по формату.\n"
                 "Ожидается: ИМЯ_СЕРВЕРА=хост:порт\n"
                 "Пример: RK7SRV_622020001=srv01.rkcloud.ucs.ru:50072"
@@ -389,7 +412,7 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None, ex
         save_cloud_connection(ini_path, connection_string)
         connection_combo['values'] = [""] + load_saved_cloud_connections(ini_path)
         connection_combo.set("")
-        centered_info(root, "Сохранено", "Подключение сохранено в историю.")
+        centered_info("Сохранено", "Подключение сохранено в историю.")
 
     def on_enter_key(event):
         on_run()
@@ -404,6 +427,9 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None, ex
     save_btn.pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=win.destroy, width=12).pack(side="left", padx=5)
 
+    # Если в буфере обмена лежит строка нужного формата — сразу подставляем её
+    # и выделяем кнопку "Запустить", чтобы Enter сразу запускал процесс.
+    # Иначе просто активируем поле ввода с мигающим курсором для Ctrl+V.
     try:
         clipboard_text = win.clipboard_get()
     except tk.TclError:
@@ -416,7 +442,7 @@ def cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path=None, ex
         connection_combo.focus_set()
         connection_combo.icursor(tk.END)
 
-    from .ui.dialogs import _center_window
-    _center_window(win, root)
+    _center_window(win)
+
     win.focus_force()
     win.deiconify()

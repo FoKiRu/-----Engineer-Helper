@@ -30,6 +30,9 @@ from packaging import version
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modules import check_gitignore_status, extract_icon_to_temp, get_short_path_name
+from modules import dialogs
+from modules.dialogs import _center_window, centered_info, centered_warning, centered_error
+from modules.dialogs import centered_askyesno
 from modules.data_manager import load_data, save_data, migrate_old_configs, load_settings_and_paths, get_task_data
 from modules.data_manager import save_settings_and_path as _save_recent_path
 from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
@@ -41,8 +44,7 @@ from modules.process_utils import start_refsrv, start_rk7man, start_midserv, sta
 from modules.process_utils import kill_refsrv, kill_rk7man, kill_midserv, kill_doscash
 from modules.process_utils import kill_processes_for_version_change, get_used_ports, get_process_by_name, is_process_running
 from modules.process_utils import get_port_info, get_rk7man_port_info, get_process_listening_ports
-from modules.cloud_rk7man import parse_cloud_rk7man_string, apply_cloud_rk7man_config
-from modules.cloud_rk7man import load_saved_cloud_connections, save_cloud_connection
+from modules.cloud_rk7man import cloud_rk7man_dialog
 from modules.shortcuts import create_task_shortcuts
 from modules.task_manager import extract_task_id_from_rk7srv_ini, find_product_root
 from modules.task_manager import extract_rk_version_from_path, find_available_rk_versions
@@ -50,7 +52,7 @@ from modules.version_updater import check_rk_updates, download_version, extract_
 from modules.version_updater import find_latest_local_version, compare_versions
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.7.25"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v1.9.8.25"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -91,6 +93,7 @@ root.title(f"EngiHelp {SCRIPT_VERSION}")
 icon_path = extract_icon_to_temp()
 if icon_path:
    root.iconbitmap(icon_path)  # Применяем иконку к главному окну
+dialogs.init(root, icon_path)  # root и иконка для всех centered_* окон
 
 # Размеры главного окна
 WINDOW_WIDTH = 412
@@ -183,283 +186,7 @@ def open_task_in_sd():
 
 # ======================= Работа с INI-файлами (импортировано из modules.ini_utils) =======================
 
-# ======================= Cloud RK7man =======================
-def launch_cloud_rk7man(tmp_ini_path, version_ini_path=None):
-    """Запускает rk7man.exe напрямую с временным ini-файлом в качестве аргумента,
-    без изменения реального rk7man.ini. Рабочая директория — там, где лежит rk7man.exe,
-    иначе исполняемый файл выдаёт ошибку."""
-    target_ini = version_ini_path if version_ini_path else ini_path
-    exe_path = os.path.join(target_ini, "rk7man.exe")
-    if not os.path.isfile(exe_path):
-        centered_error("Ошибка", f"Файл не найден:\n{exe_path}")
-        return
-
-    ini_path_norm = os.path.normpath(target_ini).lower()
-    for proc, exe_dir in get_process_by_name('rk7man.exe'):
-        if exe_dir == ini_path_norm:
-            try:
-                proc.terminate()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-
-    time.sleep(0.5)
-
-    try:
-        proc = subprocess.Popen([exe_path, tmp_ini_path], cwd=target_ini)
-    except Exception as e:
-        centered_error("Ошибка запуска", str(e))
-        return
-
-    if not keep_cloud_files_var.get():
-        def _cleanup_after_exit():
-            proc.wait()
-            try:
-                os.remove(tmp_ini_path)
-            except OSError:
-                pass
-        threading.Thread(target=_cleanup_after_exit, daemon=True).start()
-
-def cloud_rk7man_dialog():
-    """Окно для ввода строки подключения к облачному серверу и запуска rk7man.exe."""
-    if not ini_path or not os.path.isfile(os.path.join(ini_path, "rk7man.ini")):
-        centered_error("Ошибка", "Файл rk7man.ini не найден в текущем пути.")
-        return
-
-    win = tk.Toplevel(root)
-    win.withdraw()
-    win.title("Cloud RK7man")
-
-    if icon_path:
-        win.iconbitmap(icon_path)
-
-    win.transient(root)
-    win.grab_set()
-
-    frame = tk.Frame(win)
-    frame.pack(fill="both", expand=True)
-
-    saved_connections = load_saved_cloud_connections(ini_path)
-    history_values = [""] + saved_connections
-
-    tk.Label(
-        frame,
-        text="Введите строку подключения к облачному серверу",
-        justify="center"
-    ).pack(padx=15, pady=(15, 0))
-
-    hint = tk.Frame(frame)
-    hint.pack(padx=15, pady=(0, 5))
-
-    link_font = tkfont.nametofont("TkDefaultFont").copy()
-    link_font.configure(underline=True)
-
-    tk.Label(hint, text="(строку можно взять у").pack(side="left")
-    link = tk.Label(hint, text="бота", fg="blue", cursor="hand2", font=link_font)
-    link.pack(side="left")
-    link.bind("<Button-1>", lambda e: webbrowser.open("https://t.me/rkcloud_bot"))
-    tk.Label(hint, text="):").pack(side="left")
-
-    tk.Label(
-        frame,
-        text="Шаблон: ИМЯ_СЕРВЕРА=хост:порт  |  История подключений в списке",
-        justify="left",
-        fg="gray40",
-        font=("TkDefaultFont", 8)
-    ).pack(padx=15, pady=(0, 5))
-
-    connection_var = tk.StringVar()
-    connection_combo = ttk.Combobox(
-        frame,
-        textvariable=connection_var,
-        values=history_values,
-        state="normal",
-        width=55
-    )
-    connection_combo.pack(padx=15, pady=(0, 5))
-
-    def on_connection_select(event):
-        """При выборе из шторки — подставляем значение."""
-        selected = connection_var.get()
-        if selected:
-            run_btn.focus_set()
-
-    connection_combo.bind("<<ComboboxSelected>>", on_connection_select)
-
-    def on_version_flag_change():
-        """Обновляем состояние полей при смене флага."""
-        is_disabled = use_current_version_var.get()
-        version_combo.config(state="disabled" if is_disabled else "readonly")
-        browse_btn.config(state="disabled" if is_disabled else "normal")
-        if is_disabled:
-            current_ver = extract_rk_version_from_path(ini_path)
-            version_var.set(current_ver if current_ver else "")
-        else:
-            version_var.set("")
-            connection_var.set("")
-
-    # Чекбокс для выбора версии запуска
-    use_current_version_var = tk.BooleanVar(value=True)
-
-    version_row_frame = tk.Frame(frame)
-    version_row_frame.pack(fill="x", padx=15, pady=(5, 5), anchor="w")
-
-    use_current_version_var.trace_add("write", lambda *_: on_version_flag_change())
-
-    version_checkbox = tk.Checkbutton(
-        version_row_frame,
-        text="Запускать rk7man с текущей выбранной версии",
-        variable=use_current_version_var,
-        justify="left"
-    )
-    version_checkbox.pack(side="left")
-
-    # Поле выбора версии
-    version_input_frame = tk.Frame(frame)
-    version_input_frame.pack(fill="x", padx=15, pady=(0, 10))
-
-    tk.Label(version_input_frame, text="Версия RK:", anchor="w").pack(side="left")
-
-    def on_browse_version():
-        """Открывает диалог выбора папки с версиями."""
-        new_dir = filedialog.askdirectory(
-            title="Выберите папку с версиями RK",
-            initialdir=os.path.dirname(os.path.dirname(ini_path))
-        )
-        if new_dir:
-            new_versions = []
-            try:
-                for item in os.listdir(new_dir):
-                    full_path = os.path.join(new_dir, item)
-                    if os.path.isdir(full_path):
-                        match = re.match(r'^INST(.+)$', item, re.IGNORECASE)
-                        if match:
-                            bin_win = os.path.join(full_path, "bin", "win")
-                            if os.path.isdir(bin_win):
-                                new_versions.append(match.group(1))
-            except Exception as e:
-                print(f"Ошибка сканирования: {e}")
-
-            if new_versions:
-                new_versions = sorted(new_versions, reverse=True)
-                version_combo['values'] = new_versions
-                version_combo.current(0)
-            else:
-                centered_info("Информация", "Версии RK не найдены в выбранной папке.")
-
-    browse_btn = tk.Button(version_input_frame, text="Обзор", command=on_browse_version, width=6, state="disabled")
-    browse_btn.pack(side="right", padx=(5, 0))
-
-    # Шторка с версиями
-    version_var = tk.StringVar()
-    version_combo = ttk.Combobox(
-        version_input_frame,
-        textvariable=version_var,
-        values=[],
-        state="disabled",
-        width=20
-    )
-    version_combo.pack(side="left", padx=(5, 0), fill="x", expand=True)
-
-    def on_version_combo_select(event):
-        """При выборе версии из шторки."""
-        pass  # Можно добавить дополнительную логику при необходимости
-
-    version_combo.bind("<<ComboboxSelected>>", on_version_combo_select)
-
-    # Инициализация
-    on_version_flag_change()
-
-    def get_target_ini_path():
-        """Возвращает ini_path для запуска rk7man."""
-        if use_current_version_var.get():
-            return ini_path
-        target_ver = version_var.get()
-        if not target_ver:
-            centered_error("Ошибка", "Выберите версию RK для запуска.")
-            return None
-        parent_dir = os.path.dirname(os.path.dirname(ini_path))
-        target_path = os.path.join(parent_dir, f"INST{target_ver}", "bin", "win")
-        if os.path.isdir(target_path):
-            return target_path
-        centered_error("Ошибка", f"Папка версии не найдена:\n{target_path}")
-        return None
-
-    def on_run():
-        parsed = parse_cloud_rk7man_string(connection_var.get())
-        if not parsed:
-            centered_error(
-                "Ошибка",
-                "Строка не подходит по формату.\n"
-                "Ожидается: ИМЯ_СЕРВЕРА=хост:порт\n"
-                "Пример: RK7SRV_622020001=srv01.rkcloud.ucs.ru:50072"
-            )
-            return
-        server_name, host, port = parsed
-        connection_string = connection_var.get().strip()
-
-        save_cloud_connection(ini_path, connection_string)
-
-        target_ini = get_target_ini_path()
-        if target_ini is None:
-            return
-
-        win.destroy()
-        tmp_ini_path, err = apply_cloud_rk7man_config(target_ini, server_name, host, port)
-        if not tmp_ini_path:
-            centered_error("Ошибка", f"Не удалось подготовить настройки:\n{err}")
-            return
-        launch_cloud_rk7man(tmp_ini_path, target_ini)
-
-    def on_save():
-        """Сохраняет подключение без запуска."""
-        parsed = parse_cloud_rk7man_string(connection_var.get())
-        if not parsed:
-            centered_error(
-                "Ошибка",
-                "Строка не подходит по формату.\n"
-                "Ожидается: ИМЯ_СЕРВЕРА=хост:порт\n"
-                "Пример: RK7SRV_622020001=srv01.rkcloud.ucs.ru:50072"
-            )
-            return
-        connection_string = connection_var.get().strip()
-        save_cloud_connection(ini_path, connection_string)
-        connection_combo['values'] = [""] + load_saved_cloud_connections(ini_path)
-        connection_combo.set("")
-        centered_info("Сохранено", "Подключение сохранено в историю.")
-
-    def on_enter_key(event):
-        on_run()
-
-    win.bind("<Return>", on_enter_key)
-
-    btn_frame = tk.Frame(frame)
-    btn_frame.pack(pady=(0, 15))
-    run_btn = tk.Button(btn_frame, text="Запустить", command=on_run, width=12)
-    run_btn.pack(side="left", padx=5)
-    save_btn = tk.Button(btn_frame, text="Сохранить", command=on_save, width=12)
-    save_btn.pack(side="left", padx=5)
-    tk.Button(btn_frame, text="Отмена", command=win.destroy, width=12).pack(side="left", padx=5)
-
-    # Если в буфере обмена лежит строка нужного формата — сразу подставляем её
-    # и выделяем кнопку "Запустить", чтобы Enter сразу запускал процесс.
-    # Иначе просто активируем поле ввода с мигающим курсором для Ctrl+V.
-    try:
-        clipboard_text = win.clipboard_get()
-    except tk.TclError:
-        clipboard_text = ""
-
-    if parse_cloud_rk7man_string(clipboard_text):
-        connection_var.set(clipboard_text.strip())
-        run_btn.focus_set()
-    else:
-        connection_combo.focus_set()
-        connection_combo.icursor(tk.END)
-
-    _center_window(win)
-
-    win.focus_force()
-    win.deiconify()
-# ======================= Конец Cloud RK7man =======================
+# Cloud RK7man (окно, запуск, конфиг) — modules/cloud_rk7man.py
 
 def on_check():
     found, missing = check_files(ini_path)
@@ -3092,183 +2819,6 @@ def proceed_with_deletion(protected_files, base_path, backup_path=None):
         centered_info("Удаление файлов и папок", "Нет элементов для удаления или все элементы защищены.")
 
 
-# Максимальная ширина всплывающих окон: если текст в Label не влезает,
-# он переносится на новую строку (wraplength), а не растягивает окно.
-CENTERED_WINDOW_MAX_WIDTH = 500
-
-def _wrap_labels(widget, wraplength):
-    if isinstance(widget, tk.Label):
-        widget.config(wraplength=wraplength)
-    for child in widget.winfo_children():
-        _wrap_labels(child, wraplength)
-
-def _center_window(win, max_width=CENTERED_WINDOW_MAX_WIDTH, min_width=280):
-    """Центрирует Toplevel-окно относительно root с ограничением максимальной ширины."""
-    win.update_idletasks()
-    w = win.winfo_reqwidth()
-    if w > max_width:
-        _wrap_labels(win, max_width - 40)
-        win.update_idletasks()
-        w = win.winfo_reqwidth()
-    w = max(min(w, max_width), min_width)
-    h = win.winfo_reqheight()
-    x = root.winfo_x() + (root.winfo_width() - w) // 2
-    y = root.winfo_y() + (root.winfo_height() - h) // 2
-    win.geometry(f"{w}x{h}+{x}+{y}")
-    win.resizable(False, False)
-
-
-def centered_info(title, message):
-    """Центрированное информационное окно."""
-    win = tk.Toplevel(root)
-    win.withdraw()
-    win.title(title)
-
-    if icon_path:
-        win.iconbitmap(icon_path)
-
-    win.transient(root)
-    win.grab_set()
-
-    frame = tk.Frame(win)
-    frame.pack(fill="both", expand=True)
-
-    tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
-    tk.Button(frame, text="OK", command=win.destroy, width=12).pack(pady=(0, 15))
-
-    _center_window(win)
-
-    win.focus_force()
-    win.deiconify()
-
-
-def centered_warning(title, message):
-    """Центрированное окно предупреждения."""
-    win = tk.Toplevel(root)
-    win.withdraw()
-    win.title(title)
-
-    if icon_path:
-        win.iconbitmap(icon_path)
-
-    win.transient(root)
-    win.grab_set()
-
-    frame = tk.Frame(win)
-    frame.pack(fill="both", expand=True)
-
-    tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
-    tk.Button(frame, text="OK", command=win.destroy, width=12).pack(pady=(0, 15))
-
-    _center_window(win)
-
-    win.focus_force()
-    win.deiconify()
-
-
-def centered_error(title, message):
-    """Центрированное окно ошибки."""
-    win = tk.Toplevel(root)
-    win.withdraw()
-    win.title(title)
-
-    if icon_path:
-        win.iconbitmap(icon_path)
-
-    win.transient(root)
-    win.grab_set()
-
-    frame = tk.Frame(win)
-    frame.pack(fill="both", expand=True)
-
-    tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
-    tk.Button(frame, text="OK", command=win.destroy, width=12).pack(pady=(0, 15))
-
-    _center_window(win)
-
-    win.focus_force()
-    win.deiconify()
-
-
-def centered_askyesno(title, message):
-    """Центрированное окно с вопросом Да/Нет. Возвращает True/False."""
-    result = [None]
-
-    def on_yes():
-        result[0] = True
-        win.destroy()
-
-    def on_no():
-        result[0] = False
-        win.destroy()
-
-    win = tk.Toplevel(root)
-    win.withdraw()
-    win.title(title)
-
-    if icon_path:
-        win.iconbitmap(icon_path)
-
-    win.transient(root)
-    win.grab_set()
-
-    frame = tk.Frame(win)
-    frame.pack(fill="both", expand=True)
-
-    tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
-
-    btn_frame = tk.Frame(frame)
-    btn_frame.pack(pady=(0, 15))
-    tk.Button(btn_frame, text="Да", command=on_yes, width=10).pack(side="left", padx=5)
-    tk.Button(btn_frame, text="Нет", command=on_no, width=10).pack(side="left", padx=5)
-
-    _center_window(win)
-
-    win.focus_force()
-    win.deiconify()
-    win.wait_window()
-    return result[0]
-
-
-def centered_askokcancel(title, message):
-    """Центрированное окно с вопросом OK/Отмена. Возвращает True/False."""
-    result = [None]
-
-    def on_ok():
-        result[0] = True
-        win.destroy()
-
-    def on_cancel():
-        result[0] = False
-        win.destroy()
-
-    win = tk.Toplevel(root)
-    win.withdraw()
-    win.title(title)
-
-    if icon_path:
-        win.iconbitmap(icon_path)
-
-    win.transient(root)
-    win.grab_set()
-
-    frame = tk.Frame(win)
-    frame.pack(fill="both", expand=True)
-
-    tk.Label(frame, text=message, justify="left").pack(padx=15, pady=(15, 10))
-
-    btn_frame = tk.Frame(frame)
-    btn_frame.pack(pady=(0, 15))
-    tk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side="left", padx=5)
-    tk.Button(btn_frame, text="Отмена", command=on_cancel, width=10).pack(side="left", padx=5)
-
-    _center_window(win)
-
-    win.focus_force()
-    win.deiconify()
-    win.wait_window()
-    return result[0]
-
 # ======================= Запуск / рестарт Ref, Mid Srv =======================
 def run_or_restart_process(exe_name):
     exe_path = os.path.join(ini_path, exe_name)
@@ -4247,29 +3797,6 @@ refserver_var.trace_add("write", lambda *args: save_refserver_params())
 load_wincash_params()
 load_refserver_params()
 
-# Подсказка при наведении на кнопку "Проверить файлы"
-def create_tooltip(widget, text):
-    tooltip = None
-
-    def on_enter(event):
-        nonlocal tooltip
-        x = widget.winfo_rootx() + widget.winfo_width() + 10
-        y = widget.winfo_rooty()
-        tooltip = tk.Toplevel(widget)
-        tooltip.overrideredirect(True)
-        tooltip.geometry(f"+{x}+{y}")
-        label = tk.Label(tooltip, text=text, bg="lightyellow", relief="solid", borderwidth=1, justify="left", padx=5, pady=3)
-        label.pack()
-
-    def on_leave(event):
-        nonlocal tooltip
-        if tooltip:
-            tooltip.destroy()
-            tooltip = None
-
-    widget.bind("<Enter>", on_enter)
-    widget.bind("<Leave>", on_leave)
-
 def copy_missing_ini_files():
     bin_win_path = ini_path
     bin_win_ini = os.path.join(bin_win_path, "ini")
@@ -4344,7 +3871,7 @@ change_version_btn = tk.Button(check_folder_frame, text="Сменить верс
 change_version_btn.grid(row=1, column=1, padx=5, sticky="ew", pady=(5, 0))
 
 # Кнопка "Cloud RK7man" (экспериментальная, под "Очистить Base")
-cloud_rk7man_btn = tk.Button(check_folder_frame, text="Cloud RK7man", command=cloud_rk7man_dialog)
+cloud_rk7man_btn = tk.Button(check_folder_frame, text="Cloud RK7man", command=lambda: cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path))
 cloud_rk7man_btn.grid(row=1, column=2, padx=5, sticky="ew", pady=(5, 0))
 
 # Настройка весов строк и столбцов для равномерного распределения
