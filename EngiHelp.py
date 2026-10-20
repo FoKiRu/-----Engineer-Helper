@@ -46,7 +46,7 @@ from modules.task_manager import create_task_for_version, get_task_label_for_dir
 from modules.version_updater import check_rk_updates, download_version, extract_zip
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.9.30"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v1.9.9.31"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -818,9 +818,7 @@ def on_task_selected(event):
         save_refserver_params()
 
     # Применяем Port
-    if "Port" in ini_settings and ini_settings["Port"]:
-        apply_port(ini_path_from_task, str(ini_settings["Port"]))
-        port_var.set(str(ini_settings["Port"]))
+    _apply_task_port(ini_path_from_task, ini_settings)
 
     # Применяем base_path
     base_path = task_info.get("base_path", "")
@@ -1490,9 +1488,7 @@ def apply_task_version(task_id, selected_version):
         refserver_var.set(ini_settings["REFSERVER"])
         save_refserver_params()
 
-    if "Port" in ini_settings and ini_settings["Port"]:
-        apply_port(ini_path_from_version, str(ini_settings["Port"]))
-        port_var.set(str(ini_settings["Port"]))
+    _apply_task_port(ini_path_from_version, ini_settings)
 
     base_path = version_info.get("base_path", "")
     if base_path and os.path.exists(rk7srv_ini_path):
@@ -1898,6 +1894,8 @@ def apply_default_ini_settings(ini_path_val=None):
     if "REFSERVER" in ini_settings:
         refserver_var.set(ini_settings["REFSERVER"])
         save_refserver_params()
+    # Применяем Port
+    _apply_task_port(ini_path_val, ini_settings)
     on_check()
     print(f"[OK] Дефолтные настройки применены для: {ini_path_val}")
 
@@ -3152,16 +3150,43 @@ def adjust_port(delta):
     port = str(new_port)
     port_var.set(port)
     apply_port(ini_path, port)
-    # Сохраняем в ini_settings задачи
+    # Сохраняем в ini_settings задачи (и её активной версии) или в дефолты версии
     task_id = task_id_var.get().strip()
     if task_id:
+        _save_task_port(task_id, port)
+    else:
+        sync_default_settings_if_no_task()
+
+def _save_task_port(task_id, port, data=None):
+    """Сохраняет Port в ini_settings задачи и её активной версии (по ini_path).
+    Без версии apply_task_version при следующем переключении затёр бы порт старым.
+    Если data передан — только изменяет его (сохранение делает вызывающий код)."""
+    own_data = data is None
+    if own_data:
         data = load_data()
-        if task_id in data.get("tasks", {}):
-            if "ini_settings" not in data["tasks"][task_id]:
-                data["tasks"][task_id]["ini_settings"] = {}
-            data["tasks"][task_id]["ini_settings"]["Port"] = port
-            save_data(data)
-            print(f"[PORT] Сохранён порт {port} для задачи {task_id}")
+    task_data = data.get("tasks", {}).get(task_id)
+    if not task_data:
+        return
+    task_data.setdefault("ini_settings", {})["Port"] = port
+    active_ini_path = task_data.get("ini_path", "")
+    for version_data in task_data.get("versions", {}).values():
+        if version_data.get("ini_path") == active_ini_path:
+            version_data.setdefault("ini_settings", {})["Port"] = port
+            break
+    if own_data:
+        save_data(data)
+        print(f"[PORT] Сохранён порт {port} для задачи {task_id}")
+
+def _apply_task_port(ini_path_val, ini_settings):
+    """Применяет Port из ini_settings. Если у задачи порт не сохранён — берёт порт
+    из дефолтных настроек версии, чтобы не остался порт предыдущей задачи."""
+    port = ini_settings.get("Port")
+    if not port:
+        default_entry = load_default_ini_settings(ini_path_val) or {}
+        port = default_entry.get("ini_settings", {}).get("Port")
+    if port:
+        apply_port(ini_path_val, str(port))
+        port_var.set(str(port))
 
 port_spin_frame = tk.Frame(port_inner)
 port_spin_frame.pack(side="left")
@@ -3517,7 +3542,7 @@ def apply_network_ids_silent_for_task(task_id):
     save_refserver_params()
 
 def apply_ini_flags_silent_for_task(task_id):
-    """Сохраняет UseSQL и UseDBSync в JSON для указанной задачи (при смене задачи)."""
+    """Сохраняет UseSQL, UseDBSync и Port в JSON для указанной задачи (при смене задачи)."""
     if not task_id:
         return
 
@@ -3554,6 +3579,11 @@ def apply_ini_flags_silent_for_task(task_id):
                 version_data["ini_settings"]["UseSQL"] = task_data["ini_settings"]["UseSQL"]
                 version_data["ini_settings"]["UseDBSync"] = task_data["ini_settings"]["UseDBSync"]
                 break
+
+    # Port — текущий порт уходящей задачи (иначе при возврате к ней останется чужой)
+    port = port_var.get().strip()
+    if port.isdigit():
+        _save_task_port(task_id, port, data)
 
     data["tasks"] = tasks
     save_data(data)
