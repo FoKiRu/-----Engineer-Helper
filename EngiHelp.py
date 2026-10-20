@@ -25,106 +25,29 @@ import queue
 import tkinter.font as tkfont
 from packaging import version
 
-# ======================= Модули (опционально) =======================
-MODULES_AVAILABLE = False
+# ======================= Модули =======================
+# Папка modules лежит рядом со скриптом (в exe — распаковывается PyInstaller'ом)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-try:
-    # Добавляем родительскую директорию (где лежит папка modules)
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-    if os.path.isdir(os.path.join(MODULE_DIR, 'modules')):
-        sys.path.insert(0, MODULE_DIR)
-        try:
-            from modules.data_manager import load_data, save_data, migrate_old_configs, load_settings_and_paths, save_settings_and_path
-            from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
-            from modules.ini_utils import set_port_rk7srv, set_port_rk7man, apply_port
-            from modules.ini_utils import FILES, get_usedbsync_values, detect_consensus_value, get_usesql_value, get_port_value, get_port_value_for_path
-            from modules.ini_utils import get_refserver_name, get_station_server_for_path, update_ini_file, update_rkeeper_ini_basepath
-            from modules.ini_utils import update_rk7srv_ini, get_ini_settings, check_files
-            from modules.process_utils import start_refsrv, start_rk7man, start_midserv, start_wincash
-            from modules.process_utils import kill_refsrv, kill_rk7man, kill_midserv, kill_doscash
-            from modules.process_utils import kill_processes_for_version_change, get_used_ports, get_process_by_name, is_process_running
-            from modules.process_utils import get_port_info, get_rk7man_port_info, get_process_listening_ports
-            from modules.cloud_rk7man import parse_cloud_rk7man_string, apply_cloud_rk7man_config
-            from modules.shortcuts import create_task_shortcuts
-            from modules.task_manager import extract_task_id_from_rk7srv_ini, find_product_root
-            from modules.task_manager import extract_rk_version_from_path, find_available_rk_versions
-            from modules.version_updater import check_rk_updates, download_version, extract_zip
-            from modules.version_updater import find_latest_local_version, compare_versions
-            MODULES_AVAILABLE = True
-            print("[OK] Модули загружены")
-        except ImportError as e:
-            print(f"[WARN] Модули не загружены: {e}")
-except Exception as e:
-    print(f"[WARN] Ошибка загрузки модулей: {e}")
-
-# Используем встроенные константы если модули не загружены
-if not MODULES_AVAILABLE:
-    FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
-
-    def extract_task_id_from_rk7srv_ini(ini_path):
-        if not os.path.exists(ini_path):
-            return None
-        try:
-            with open(ini_path, 'r', encoding='cp1251') as file:
-                for line in file:
-                    line = line.strip()
-                    if line.lower().startswith("udbfile") or line.lower().startswith("workmodules"):
-                        match = re.search(r'([a-zA-Z0-9_]+)[/\\]base[/\\]', line)
-                        if match:
-                            return match.group(1)
-                        match = re.search(r'base_([a-zA-Z0-9_]+)', line)
-                        if match:
-                            return match.group(1)
-        except Exception as e:
-            print(f"Ошибка при чтении rk7srv.INI: {e}")
-        return None
-
-    def find_product_root(selected_path):
-        original = selected_path
-        if os.path.basename(original).lower() == "win":
-            parent = os.path.dirname(original)
-            if os.path.basename(parent).lower() == "bin":
-                root = os.path.dirname(parent)
-            else:
-                return None
-        elif os.path.basename(original).lower() == "bin":
-            root = os.path.dirname(original)
-        else:
-            root = original
-        bin_win = os.path.join(root, "bin", "win")
-        if all(os.path.isfile(os.path.join(bin_win, f)) for f in FILES):
-            return root
-        return None
-
-    def extract_rk_version_from_path(path):
-        product_root = find_product_root(path)
-        if not product_root:
-            return None
-        folder_name = os.path.basename(product_root)
-        match = re.match(r'^INST(.+)$', folder_name, re.IGNORECASE)
-        if match:
-            return match.group(1)
-        return None
-
-    def find_available_rk_versions(path):
-        product_root = find_product_root(path)
-        if not product_root:
-            return []
-        parent_dir = os.path.dirname(product_root)
-        versions = []
-        try:
-            for item in os.listdir(parent_dir):
-                full_path = os.path.join(parent_dir, item)
-                if os.path.isdir(full_path):
-                    match = re.match(r'^INST(.+)$', item, re.IGNORECASE)
-                    if match:
-                        version_str = match.group(1)
-                        bin_win = os.path.join(full_path, "bin", "win")
-                        if os.path.isdir(bin_win):
-                            versions.append(version_str)
-        except Exception as e:
-            print(f"Ошибка сканирования версий: {e}")
-        return versions
+from modules import check_gitignore_status, extract_icon_to_temp, get_short_path_name
+from modules.data_manager import load_data, save_data, migrate_old_configs, load_settings_and_paths, get_task_data
+from modules.data_manager import save_settings_and_path as _save_recent_path
+from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
+from modules.ini_utils import set_port_rk7srv, set_port_rk7man, apply_port
+from modules.ini_utils import FILES, get_usedbsync_values, detect_consensus_value, get_usesql_value, get_port_value, get_port_value_for_path
+from modules.ini_utils import get_refserver_name, get_station_server_for_path, update_ini_file, update_rkeeper_ini_basepath
+from modules.ini_utils import update_rk7srv_ini, get_ini_settings, check_files
+from modules.process_utils import start_refsrv, start_rk7man, start_midserv, start_wincash
+from modules.process_utils import kill_refsrv, kill_rk7man, kill_midserv, kill_doscash
+from modules.process_utils import kill_processes_for_version_change, get_used_ports, get_process_by_name, is_process_running
+from modules.process_utils import get_port_info, get_rk7man_port_info, get_process_listening_ports
+from modules.cloud_rk7man import parse_cloud_rk7man_string, apply_cloud_rk7man_config
+from modules.cloud_rk7man import load_saved_cloud_connections, save_cloud_connection
+from modules.shortcuts import create_task_shortcuts
+from modules.task_manager import extract_task_id_from_rk7srv_ini, find_product_root
+from modules.task_manager import extract_rk_version_from_path, find_available_rk_versions
+from modules.version_updater import check_rk_updates, download_version, extract_zip
+from modules.version_updater import find_latest_local_version, compare_versions
 
 # ======================= Константы и настройки =======================
 SCRIPT_VERSION = "v1.9.7.25"  #Формат: vМajor.Minor.Patch.Build
@@ -144,38 +67,8 @@ DESCRIPTION = (
     "- переключать версию RK и переносить данные между версиями\n"
     "- автоматически сохранять последние пути и настройки\n"
 )
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # путь к скрипту
-DATA_FILE = os.path.join(str(Path.home()), "Documents", "EngiHelp_data.json")
-OLD_CONFIG_FILE = os.path.join(str(Path.home()), "Documents", "EngiHelp_config.json")
-OLD_TASKS_FILE = os.path.join(str(Path.home()), "Documents", "tasks.json")
 
 # ======================= Проверка URL файла .gitignore на GitHub =======================
-GITHUB_URL = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/.gitignore"
-
-def check_gitignore_status():
-    """
-    Функция для получения первой строки из файла .gitignore на GitHub.
-    Если первая строка равна "0", программа продолжит выполнение,
-    если "1", программа завершит выполнение.
-    Если запрос не удался (timeout, блокировка и т.д.) — запускается с предупреждением.
-    """
-    try:
-        response = requests.get(GITHUB_URL, timeout=5)
-        response.raise_for_status()
-        first_line = response.text.splitlines()[0].strip()
-
-        if first_line == "0":
-            return True
-        elif first_line == "1":
-            return False
-        else:
-            print(f"Неожиданный формат в .gitignore: {first_line}. Программа запускается.")
-            return True
-    except requests.RequestException as e:
-        print(f"[WARN] Не удалось проверить статус на GitHub: {e}")
-        print("[WARN] Программа запускается в обход проверки.")
-        return True
-
 # Проверяем статус в .gitignore
 if not check_gitignore_status():
     print("Программа не будет запущена.")
@@ -188,28 +81,6 @@ print("Программа запускается.")
 
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# Функция для извлечения иконки из .exe и сохранения во временную папку
-def extract_icon_to_temp():
-    # Получаем путь к текущему .exe файлу
-    exe_path = sys.executable
-    
-    # Указываем путь, куда извлечем иконку
-    temp_dir = tempfile.gettempdir()
-    icon_path = os.path.join(temp_dir, "Иконка EngiHelp.ico")
-    
-    # Проверяем, если иконка уже существует, не извлекаем заново
-    if not os.path.exists(icon_path):
-        try:
-            # Скопируем иконку из .exe в временную папку
-            with open(icon_path, "wb") as icon_file:
-                # Открываем файл .exe и ищем иконку (этот шаг можно адаптировать под конкретный случай)
-                shutil.copyfile(exe_path, icon_path)
-        except Exception as e:
-            print(f"Не удалось извлечь иконку: {e}")
-            return None
-    
-    return icon_path
 
 # === GUI ===
 root = tk.Tk()
@@ -247,15 +118,7 @@ notebook.add(settings_tab, text="Параметры")
 # load_settings_and_paths импортирована из modules.data_manager
 
 def save_settings_and_path(new_path):
-    new_path = new_path.replace("\\", "/")
     data = load_data()
-    
-    # Обновляем список путей
-    paths = data["settings"].get("recent_paths", [])
-    if new_path in paths:
-        paths.remove(new_path)
-    paths.insert(0, new_path)
-    data["settings"]["recent_paths"] = paths[:3] # Оставляем только 3 последних
 
     # Обновляем флаги настроек
     if 'auto_update_var' in globals():
@@ -265,8 +128,9 @@ def save_settings_and_path(new_path):
     if 'keep_cloud_files_var' in globals():
         data["settings"]["keep_cloud_files"] = keep_cloud_files_var.get()
 
-    save_data(data)
-    
+    # Добавляем путь в историю (3 последних) и сохраняем
+    data = _save_recent_path(new_path, data)
+
     # Обновляем выпадающий список в интерфейсе
     if 'path_entry' in globals():
         path_entry['values'] = data["settings"]["recent_paths"]
@@ -320,144 +184,6 @@ def open_task_in_sd():
 # ======================= Работа с INI-файлами (импортировано из modules.ini_utils) =======================
 
 # ======================= Cloud RK7man =======================
-CLOUD_RK7MAN_PATTERN = re.compile(r'^([A-Za-z0-9_]+)\s*=\s*([^\s:=]+):(\d{1,5})$')
-CLOUD_CONNECTIONS_FILE = "cloud_connections.txt"
-MAX_SAVED_CONNECTIONS = 5
-
-def load_saved_cloud_connections(ini_path):
-    """Загружает сохранённые строки подключения из файла (максимум 5)."""
-    file_path = os.path.join(ini_path, CLOUD_CONNECTIONS_FILE)
-    if not os.path.isfile(file_path):
-        return []
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            lines = [line.strip() for line in f if line.strip()]
-            return lines[:MAX_SAVED_CONNECTIONS]
-    except Exception:
-        return []
-
-def save_cloud_connection(ini_path, connection_string):
-    """Сохраняет строку подключения, удаляя дубликаты и оставляя 5 последних."""
-    file_path = os.path.join(ini_path, CLOUD_CONNECTIONS_FILE)
-    connections = load_saved_cloud_connections(ini_path)
-
-    # Удаляем дубликат если есть
-    connections = [c for c in connections if c != connection_string]
-
-    # Добавляем в начало (новейшее первым)
-    connections.insert(0, connection_string)
-
-    # Ограничиваем до 5
-    connections = connections[:MAX_SAVED_CONNECTIONS]
-
-    try:
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(connections))
-    except Exception as e:
-        print(f"[WARN] Не удалось сохранить подключение: {e}")
-
-
-def apply_cloud_rk7man_config(ini_path_val, server_name, host, port):
-    """Читает rk7man.ini, применяет облачные настройки в памяти и записывает
-    во временный файл рядом с оригиналом. Реальный rk7man.ini не изменяется.
-    Возвращает (temp_path, None) при успехе или (None, error_message) при ошибке."""
-    rk7man_path = os.path.join(ini_path_val, "rk7man.ini")
-    if not os.path.isfile(rk7man_path):
-        return None, "Файл rk7man.ini не найден"
-    try:
-        try:
-            with open(rk7man_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            enc = 'utf-8'
-        except UnicodeDecodeError:
-            with open(rk7man_path, 'r', encoding='cp1251') as f:
-                lines = f.readlines()
-            enc = 'cp1251'
-
-        old_server = None
-        for line in lines:
-            m = re.match(r'^\s*Server\s*=\s*(\S+)', line, re.IGNORECASE)
-            if m:
-                old_server = m.group(1).strip()
-                break
-
-        new_lines = []
-        tcpdns_updated = False
-        for line in lines:
-            stripped = line.strip()
-            if re.match(r'^\s*Server\s*=', stripped, re.IGNORECASE):
-                new_lines.append(f"Server={server_name}\n")
-            elif re.match(r'^\s*PORT\s*=', stripped, re.IGNORECASE):
-                new_lines.append(f"PORT={port}\n")
-            elif old_server and re.match(rf'^\s*{re.escape(old_server)}\s*=', stripped, re.IGNORECASE):
-                new_lines.append(f"{server_name}={host}:{port}\n")
-                tcpdns_updated = True
-            else:
-                new_lines.append(line)
-
-        if not tcpdns_updated:
-            final_lines = []
-            in_tcpdns = False
-            inserted = False
-            for line in new_lines:
-                stripped = line.strip()
-                if in_tcpdns and stripped.startswith('[') and not inserted:
-                    final_lines.append(f"{server_name}={host}:{port}\n")
-                    inserted = True
-                    in_tcpdns = False
-                final_lines.append(line)
-                if re.match(r'^\[TCPDNS\]', stripped, re.IGNORECASE):
-                    in_tcpdns = True
-            if in_tcpdns and not inserted:
-                final_lines.append(f"{server_name}={host}:{port}\n")
-                inserted = True
-            if not inserted:
-                final_lines.append(f"\n[TCPDNS]\n{server_name}={host}:{port}\n")
-            new_lines = final_lines
-
-        cloud_log_dir = os.path.join(ini_path_val, "Cloud_log")
-        os.makedirs(cloud_log_dir, exist_ok=True)
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix='.ini', prefix='rk7man_cloud_', dir=cloud_log_dir)
-        try:
-            # Гарантируем наличие [DBSYNC] UseDBSync=0 в временном файле
-            has_dbsync_section = any(re.match(r'^\s*\[DBSYNC\]', l, re.IGNORECASE) for l in new_lines)
-            has_usedbsync = any(re.match(r'^\s*UseDBSync\s*=', l, re.IGNORECASE) for l in new_lines)
-
-            if has_dbsync_section and has_usedbsync:
-                # Секция есть и ключ есть — принудительно выставляем 0
-                final2 = []
-                for line in new_lines:
-                    if re.match(r'^\s*UseDBSync\s*=', line, re.IGNORECASE):
-                        final2.append("UseDBSync=0\n")
-                    else:
-                        final2.append(line)
-                new_lines = final2
-            elif has_dbsync_section and not has_usedbsync:
-                # Секция есть, ключа нет — вставляем ключ сразу после [DBSYNC]
-                final2 = []
-                for line in new_lines:
-                    final2.append(line)
-                    if re.match(r'^\s*\[DBSYNC\]', line, re.IGNORECASE):
-                        final2.append("UseDBSync=0\n")
-                new_lines = final2
-            else:
-                # Секции нет — добавляем в конец
-                if new_lines and not new_lines[-1].endswith('\n'):
-                    new_lines.append('\n')
-                new_lines.append("\n[DBSYNC]\nUseDBSync=0\n")
-
-            with os.fdopen(tmp_fd, 'w', encoding=enc) as f:
-                f.writelines(new_lines)
-        except Exception:
-            try:
-                os.close(tmp_fd)
-            except OSError:
-                pass
-            raise
-        return tmp_path, None
-    except Exception as e:
-        return None, str(e)
-
 def launch_cloud_rk7man(tmp_ini_path, version_ini_path=None):
     """Запускает rk7man.exe напрямую с временным ini-файлом в качестве аргумента,
     без изменения реального rk7man.ini. Рабочая директория — там, где лежит rk7man.exe,
@@ -2286,9 +2012,8 @@ def show_task_selection_dialog(version_path, task_list, fallback_task_id=None):
             # Обновляем список задач в диалоге
             task_id_combobox['values'] = load_task_ids()
             select_win.destroy()
-            # Загружаем созданную задачу
-            _forced_version = version_key
-            task_id_var.set(new_task_id)
+            # Загружаем созданную задачу с уже выбранной версией
+            _load_task(new_task_id)
         else:
             centered_warning("Ошибка", message)
 
@@ -3080,12 +2805,15 @@ def apply_path(event=None, update_task=True): # Добавлен парамет�
     
     # --- ЛОГИКА АВТОЗАГРУЗКИ ЗАДАЧИ ---
     if update_task: # Выполняем только если разрешено
-        latest_task_id = find_latest_task_for_path(ini_path)
+        # find_latest_task_for_path смотрит только основной ini_path задачи,
+        # find_tasks_for_path — ещё и пути её версий (task_info["versions"]).
+        # Если задача привязана к версии только через versions — берём её.
+        path_tasks = find_tasks_for_path(ini_path)
+        latest_task_id = find_latest_task_for_path(ini_path) or (path_tasks[0] if path_tasks else None)
 
         # === ФЛАГ "Выбор задачи из выбора версии" ===
         # Если включён и для версии есть несколько задач — предлагаем выбрать задачу
         if task_from_version_var.get():
-            path_tasks = find_tasks_for_path(ini_path)
             if len(path_tasks) > 1:
                 task_id_combobox['values'] = load_task_ids()
                 show_task_selection_dialog(ini_path, path_tasks, latest_task_id)
@@ -3129,16 +2857,6 @@ def check_program_process():
         centered_warning("Проверка", "Программа не найдена.")
 
 # ======================= Удаление MIDBASE =======================
-def get_task_data(task_id):
-    """Получает данные задачи из JSON конфигурации"""
-    try:
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return data.get("tasks", {}).get(task_id)
-    except Exception as e:
-        centered_error("Ошибка", f"Не удалось прочитать конфигурацию:\n{e}")
-        return None
-
 def delete_midbase_files():
     selected_task_id = task_id_var.get().strip()
     if not selected_task_id:
@@ -3339,7 +3057,7 @@ def proceed_with_backup_and_deletion(base_path, protected_files):
         try:
             shutil.copytree(base_path, backup_path)
         except Exception as e:
-            root.after(0, lambda: (copying_win.destroy(), centered_error("Ошибка", f"Не удалось создать резервную копию:\n{e}")))
+            root.after(0, lambda err=e: (copying_win.destroy(), centered_error("Ошибка", f"Не удалось создать резервную копию:\n{err}")))
             return
 
         root.after(0, lambda: (copying_win.destroy(), proceed_with_deletion(protected_files, base_path, backup_path)))
@@ -4635,11 +4353,6 @@ check_folder_frame.grid_columnconfigure(1, weight=1)
 check_folder_frame.grid_columnconfigure(2, weight=1)
 
 
-
-def get_short_path_name(long_path):
-    buf = ctypes.create_unicode_buffer(260)
-    ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, 260)
-    return buf.value
 
 # Проверка версии
 def check_for_updates(silent=False):
