@@ -457,3 +457,36 @@ def check_files(ini_path):
         else:
             missing.append(filename)
     return found, missing
+
+# ======================= Восстановление UDBFILE / WorkModules =======================
+
+def apply_rk7srv_udf_workmodules(rk7srv_ini_path, ini_settings):
+    """Восстанавливает UDBFILE и WorkModules в rk7srv.INI из сохранённых дефолтных значений."""
+    udbfile = ini_settings.get("UDBFILE")
+    workmodules = ini_settings.get("WorkModules")
+    if not udbfile and not workmodules:
+        return
+    try:
+        with open(rk7srv_ini_path, 'r', encoding='cp1251') as f:
+            lines = f.readlines()
+
+        new_lines = []
+
+        for line in lines:
+            if re.match(r'^\s*UDBFILE\s*=', line, re.IGNORECASE):
+                if udbfile:
+                    new_lines.append(f"UDBFILE            = {udbfile}\n")
+                else:
+                    new_lines.append(line)
+            elif re.match(r'^\s*WorkModules\s*=', line, re.IGNORECASE):
+                if workmodules:
+                    new_lines.append(f"WorkModules        = {workmodules}\n")
+                else:
+                    new_lines.append(line)
+            else:
+                new_lines.append(line)
+
+        with open(rk7srv_ini_path, 'w', encoding='cp1251') as f:
+            f.writelines(new_lines)
+    except Exception as e:
+        print(f"Ошибка восстановления UDBFILE/WorkModules: {e}")

@@ -2,9 +2,10 @@
 
 import os
 import subprocess
-import threading
 import time
-import queue
+import logging
+
+import psutil
 
 # ======================= Поиск процессов =======================
 
@@ -326,3 +327,28 @@ def run_midserv_and_wincash(ini_path, after_callback):
     """Запускает midserv и wincash с задержкой."""
     start_midserv(ini_path)
     after_callback(1500, lambda: start_wincash(ini_path))
+
+# ======================= Запуск refsrv в режиме -desktop =======================
+
+def launch_refsrv(exe_path: str) -> None:
+    """Запускает refsrv.exe с параметром -desktop."""
+    try:
+        subprocess.Popen(
+            f'start "" "{exe_path}" -desktop',
+            shell=True
+        )
+        logging.info("refsrv.exe запущен: %s", exe_path)
+    except Exception as e:
+        logging.error("Не удалось запустить refsrv.exe: %s", e)
+
+def wait_and_launch_refsrv(proc: psutil.Process, exe_path: str) -> None:
+    """Ждёт завершения процесса и запускает его снова."""
+    try:
+        proc.wait(timeout=5)
+    except (psutil.TimeoutExpired, psutil.AccessDenied, psutil.NoSuchProcess):
+        time.sleep(2)
+    except Exception as e:
+        logging.error("Ошибка при ожидании процесса: %s", e)
+        time.sleep(2)
+
+    launch_refsrv(exe_path)

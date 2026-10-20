@@ -1,15 +1,11 @@
 # ======================= Импорты =======================
 from tkinter import filedialog, ttk
-from pathlib import Path
-from collections import Counter
 from functools import partial
 from datetime import datetime
 import tkinter as tk
 import os
 import re
 import shutil
-import traceback
-import json
 import psutil
 import subprocess
 import time
@@ -18,11 +14,9 @@ import logging
 import requests
 import sys
 import tempfile
-import ctypes
 import webbrowser
 import keyboard
 import queue
-import tkinter.font as tkfont
 from packaging import version
 
 # ======================= Модули =======================
@@ -32,27 +26,27 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modules import check_gitignore_status, extract_icon_to_temp, get_short_path_name
 from modules import dialogs
 from modules.dialogs import _center_window, centered_info, centered_warning, centered_error
-from modules.dialogs import centered_askyesno
-from modules.data_manager import load_data, save_data, migrate_old_configs, load_settings_and_paths, get_task_data
+from modules.dialogs import centered_askyesno, centered_askchecklist
+from modules.data_manager import load_data, save_data, load_settings_and_paths, get_task_data
 from modules.data_manager import save_settings_and_path as _save_recent_path
 from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
 from modules.ini_utils import set_port_rk7srv, set_port_rk7man, apply_port
-from modules.ini_utils import FILES, get_usedbsync_values, detect_consensus_value, get_usesql_value, get_port_value, get_port_value_for_path
-from modules.ini_utils import get_refserver_name, get_station_server_for_path, update_ini_file, update_rkeeper_ini_basepath
-from modules.ini_utils import update_rk7srv_ini, get_ini_settings, check_files
-from modules.process_utils import start_refsrv, start_rk7man, start_midserv, start_wincash
-from modules.process_utils import kill_refsrv, kill_rk7man, kill_midserv, kill_doscash
+from modules.ini_utils import FILES, detect_consensus_value, get_usesql_value, get_port_value, get_port_value_for_path
+from modules.ini_utils import get_refserver_name, update_ini_file, update_rkeeper_ini_basepath
+from modules.ini_utils import update_rk7srv_ini, get_ini_settings, check_files, apply_rk7srv_udf_workmodules
+from modules.process_utils import kill_midserv, kill_doscash
 from modules.process_utils import kill_processes_for_version_change, get_used_ports, get_process_by_name, is_process_running
 from modules.process_utils import get_port_info, get_rk7man_port_info, get_process_listening_ports
+from modules.process_utils import launch_refsrv, wait_and_launch_refsrv
 from modules.cloud_rk7man import cloud_rk7man_dialog
 from modules.shortcuts import create_task_shortcuts
 from modules.task_manager import extract_task_id_from_rk7srv_ini, find_product_root
 from modules.task_manager import extract_rk_version_from_path, find_available_rk_versions
+from modules.task_manager import create_task_for_version, get_task_label_for_dir
 from modules.version_updater import check_rk_updates, download_version, extract_zip
-from modules.version_updater import find_latest_local_version, compare_versions
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.8.25"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v1.9.9.30"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -365,44 +359,19 @@ def _restart_refsrv_by_pid(pid: int, exe_dir_norm: str) -> None:
         try:
             proc.terminate()
             threading.Thread(
-                target=_wait_and_start_refsrv,
+                target=wait_and_launch_refsrv,
                 args=(proc, exe_path),
                 daemon=True,
                 name="refsrv-restart"
             ).start()
         except (psutil.AccessDenied, psutil.NoSuchProcess):
-            _launch_refsrv(exe_path)
+            launch_refsrv(exe_path)
 
     except psutil.NoSuchProcess:
-        _launch_refsrv(exe_path)
+        launch_refsrv(exe_path)
     except Exception as e:
         logging.error("Ошибка при перезапуске refsrv.exe (pid=%s): %s", pid, e)
         centered_error("Ошибка", f"Не удалось перезапустить refsrv.exe:\n{e}")
-
-
-def _wait_and_start_refsrv(proc: psutil.Process, exe_path: str) -> None:
-    """Ждёт завершения процесса и запускает его снова."""
-    try:
-        proc.wait(timeout=5)
-    except (psutil.TimeoutExpired, psutil.AccessDenied, psutil.NoSuchProcess):
-        time.sleep(2)
-    except Exception as e:
-        logging.error("Ошибка при ожидании процесса: %s", e)
-        time.sleep(2)
-
-    _launch_refsrv(exe_path)
-
-
-def _launch_refsrv(exe_path: str) -> None:
-    """Запускает refsrv.exe с параметром -desktop."""
-    try:
-        subprocess.Popen(
-            f'start "" "{exe_path}" -desktop',
-            shell=True
-        )
-        logging.info("refsrv.exe запущен: %s", exe_path)
-    except Exception as e:
-        logging.error("Не удалось запустить refsrv.exe: %s", e)
 
 
 # ============================================================
@@ -1547,117 +1516,6 @@ def apply_task_version(task_id, selected_version):
     on_check()
 
 
-def create_task_for_version(task_id, version_path):
-    """
-    Создаёт новую задачу для указанной версии RK.
-    Копирует base, создаёт пустую MIDBASE, обновляет INI и сохраняет в JSON.
-    """
-    task_id = task_id.strip()
-    if not task_id:
-        return False, "Номер задачи не может быть пустым"
-
-    product_root = find_product_root(version_path)
-    if not product_root:
-        return False, "Не удалось определить корневую папку продукта"
-
-    base_path = os.path.join(product_root, "base")
-    if not os.path.exists(base_path):
-        return False, f"Папка base не найдена: {base_path}"
-
-    # Проверяем блокировку refsrv.exe
-    refsrv_running = any(
-        p.info['name'].lower() == "refsrv.exe"
-        for p in psutil.process_iter(['name'])
-    )
-
-    if refsrv_running:
-        test_file = os.path.join(base_path, "rk7.udb")
-        if os.path.exists(test_file):
-            try:
-                shutil.copy2(test_file, os.path.join(product_root, "rk7.udb.test"))
-                os.remove(os.path.join(product_root, "rk7.udb.test"))
-            except PermissionError:
-                return False, "Файлы в папке base заблокированы процессом refsrv.exe"
-            except Exception as e:
-                return False, f"Ошибка проверки блокировки: {e}"
-
-    # Проверяем, не существует ли уже задача с таким ID
-    data = load_data()
-    tasks = data.get("tasks", {})
-    if task_id in tasks:
-        return False, f"Задача {task_id} уже существует"
-
-    # === Папка {task_id}/base ===
-    task_folder = os.path.join(product_root, task_id)
-    new_base_path = os.path.join(task_folder, "base")
-
-    if os.path.exists(new_base_path):
-        return False, f"Папка {new_base_path} уже существует"
-
-    # Список файлов и папок, которые нужно скопировать из base (без rk7.udb)
-    files_to_copy = [
-        "drvlocalize", "workmods", "dealerpresets.udb",
-        "upgradedevices.abs", "upgradepresets.abs"
-    ]
-
-    try:
-        # Создаем папку new_base_path
-        os.makedirs(new_base_path, exist_ok=True)
-
-        # Копируем только нужные файлы и папки
-        for item in files_to_copy:
-            src_item = os.path.join(base_path, item)
-            dst_item = os.path.join(new_base_path, item)
-            if os.path.exists(src_item):
-                if os.path.isdir(src_item):
-                    shutil.copytree(src_item, dst_item)
-                else:
-                    shutil.copy2(src_item, dst_item)
-    except Exception as e:
-        return False, f"Не удалось скопировать файлы base: {e}"
-
-    # === Папка {task_id}/MIDBASE - ВСЕГДА СОЗДАЁТСЯ ПУСТОЙ ===
-    midbase_path = os.path.join(task_folder, "MIDBASE")
-    midbase_ini_name = os.path.join(task_id, "MIDBASE")
-
-    try:
-        os.makedirs(midbase_path, exist_ok=True)
-    except Exception as e:
-        return False, f"Не удалось создать папку MIDBASE: {e}"
-
-    # Обновляем BasePath в RKEEPER.INI
-    update_rkeeper_ini_basepath(version_path, midbase_ini_name)
-
-    # Собираем параметры INI
-    ini_settings = get_ini_settings(version_path)
-
-    # Сохраняем в JSON
-    task_entry = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "base_path": new_base_path.replace("\\", "/"),
-        "midbase_path": midbase_path.replace("\\", "/"),
-        "ini_path": version_path.replace("\\", "/"),
-        "status": "copied",
-        "ini_settings": ini_settings,
-        "versions": {}
-    }
-
-    tasks[task_id] = task_entry
-    tasks = {task_id: tasks[task_id], **{k: v for k, v in tasks.items() if k != task_id}}
-    data["tasks"] = tasks
-    save_data(data)
-
-    # Обновляем rk7srv.INI
-    base_dir = os.path.join(task_id, "base")
-    rk7srv_ini_path = os.path.join(version_path, "rk7srv.INI")
-    update_rk7srv_ini(rk7srv_ini_path, base_dir)
-
-    # Создаём ярлыки
-    create_task_shortcuts(task_folder, version_path)
-
-    return True, f"Задача {task_id} создана"
-
-
 def show_task_selection_dialog(version_path, task_list, fallback_task_id=None):
     """
     Диалог выбора задачи при выборе версии RK.
@@ -1786,7 +1644,6 @@ def show_task_selection_dialog(version_path, task_list, fallback_task_id=None):
     select_win.focus_force()
     select_win.deiconify()
 
-import keyboard
 
 # ======================= Поддержка копирования при русской раскладке =======================
 
@@ -1973,41 +1830,6 @@ def save_task_id_to_file():
         centered_error("Ошибка", f"Не удалось сохранить номер задачи:\n{e}")
 """
 
-def _apply_rk7srv_udf_workmodules(rk7srv_ini_path, ini_settings):
-    """Восстанавливает UDBFILE и WorkModules в rk7srv.INI из сохранённых дефолтных значений."""
-    udbfile = ini_settings.get("UDBFILE")
-    workmodules = ini_settings.get("WorkModules")
-    if not udbfile and not workmodules:
-        return
-    try:
-        with open(rk7srv_ini_path, 'r', encoding='cp1251') as f:
-            lines = f.readlines()
-
-        new_lines = []
-        udbfile_written = False
-        workmodules_written = False
-
-        for line in lines:
-            if re.match(r'^\s*UDBFILE\s*=', line, re.IGNORECASE):
-                if udbfile:
-                    new_lines.append(f"UDBFILE            = {udbfile}\n")
-                    udbfile_written = True
-                else:
-                    new_lines.append(line)
-            elif re.match(r'^\s*WorkModules\s*=', line, re.IGNORECASE):
-                if workmodules:
-                    new_lines.append(f"WorkModules        = {workmodules}\n")
-                    workmodules_written = True
-                else:
-                    new_lines.append(line)
-            else:
-                new_lines.append(line)
-
-        with open(rk7srv_ini_path, 'w', encoding='cp1251') as f:
-            f.writelines(new_lines)
-    except Exception as e:
-        print(f"Ошибка восстановления UDBFILE/WorkModules: {e}")
-
 # ======================= Дефолтные настройки директории версии =======================
 
 def save_default_ini_settings(ini_path_val=None):
@@ -2066,7 +1888,7 @@ def apply_default_ini_settings(ini_path_val=None):
         update_ini_file(rk7srv_ini_path, str(ini_settings["UseSQL"]), "USESQL")
     # Восстанавливаем UDBFILE и WorkModules в rk7srv.INI
     if os.path.exists(rk7srv_ini_path):
-        _apply_rk7srv_udf_workmodules(rk7srv_ini_path, ini_settings)
+        apply_rk7srv_udf_workmodules(rk7srv_ini_path, ini_settings)
     # Применяем Station/Server
     if "Station" in ini_settings and "Server" in ini_settings:
         station_var.set(ini_settings["Station"])
@@ -2986,38 +2808,44 @@ def kill_midserv_process():
     """Завершает midserv.exe (обёртка для модульной функции)."""
     kill_midserv()
 
-def _find_free_port(start_port: int = 6000, max_attempts: int = 100) -> int | None:
-    """Находит первый свободный порт начиная с start_port."""
-    used = get_used_ports()
-    for port in range(start_port, start_port + max_attempts):
-        if port not in used:
-            return port
-    return None
+def _describe_refsrv_processes(procs):
+    """Описание refsrv-процессов для окна закрытия.
+    procs — список (proc, exe_dir). Для каждого — текст флажка: путь, задача и версия;
+    порты уходят в свёрнутый блок. Возвращает (список текстов, текст портов, заголовок блока)."""
+    texts, port_blocks, total_ports = [], [], 0
+    for proc, exe_dir in procs:
+        ports = get_process_listening_ports(proc.pid)
+        text = f"refsrv.exe ({exe_dir})"
+        if len(procs) > 1:
+            text += f", PID {proc.pid}"
+        task_label = get_task_label_for_dir(exe_dir, ports)
+        if task_label:
+            text += f"\n{task_label}"
+        if ports:
+            total_ports += len(ports)
+            port_lines = "\n".join(line.strip() for line in get_port_info(ports).splitlines())
+            port_blocks.append(f"PID {proc.pid}:\n{port_lines}" if len(procs) > 1 else port_lines)
+        else:
+            ini_port = get_port_value_for_path(exe_dir)
+            text += f"\nПорт из INI: {ini_port or 'не найден'}"
+        texts.append(text)
+    if not port_blocks:
+        return texts, None, None
+    return texts, "\n\n".join(port_blocks), f"Порты refsrv ({total_ports})"
 
-
-
-def _get_task_label_for_dir(exe_dir: str) -> str | None:
-    """Определяет ID задачи и версию RK для процесса, запущенного из exe_dir
-    (на основе rk7srv.INI в этой папке). Возвращает строку вида
-    'задача 197034, версия 7.0.0.1234' или None, если не удалось определить."""
-    if not exe_dir:
-        return None
-    ini_file = os.path.join(exe_dir, "rk7srv.INI")
-    task_id = extract_task_id_from_rk7srv_ini(ini_file)
-    version = extract_rk_version_from_path(exe_dir)
-    if not task_id and not version:
-        return None
-    parts = []
-    if task_id:
-        parts.append(f"задача {task_id}")
-    if version:
-        parts.append(f"версия {version}")
-    return ", ".join(parts)
-
+def _kill_checked(procs, checked):
+    """Закрывает процессы, для которых в окне остался отмеченным флажок."""
+    for proc, is_checked in zip(procs, checked):
+        if proc is None or not is_checked:
+            continue
+        try:
+            proc.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
 
 def kill_refsrv_and_rk7man():
     """Комбинированное закрытие refsrv + rk7man: если оба из текущей директории —
-    сразу закрывает, иначе показывает окно с информацией о всех процессах."""
+    сразу закрывает, иначе показывает окно со всеми процессами (флажки — что закрыть)."""
     ini_path_norm = os.path.normpath(ini_path).lower()
 
     refsrv_procs = get_process_by_name('refsrv.exe')
@@ -3034,63 +2862,38 @@ def kill_refsrv_and_rk7man():
         rk7man_same[0].terminate()
         return
 
-    # Если хотя бы один из другой директории или не запущен — показываем информацию
-    msg_lines = []
+    # Иначе — окно с флажками: entries[i] — строка окна, procs[i] — её процесс (None — просто текст).
+    # Процессы текущей версии — первыми, описание у всех одинаковое.
+    entries, procs = [], []
+    refsrv_list = [(p, ini_path_norm) for p in refsrv_same] + refsrv_other
+    rk7man_list = [(p, ini_path_norm) for p in rk7man_same] + rk7man_other
 
-    # Собираем процессы для закрытия
-    to_close = {'refsrv': refsrv_same + [p for p, _ in refsrv_other],
-                'rk7man': rk7man_same + [p for p, _ in rk7man_other]}
+    # Порты refsrv показываем свёрнутым блоком — нужны редко
+    refsrv_texts, refsrv_ports, refsrv_ports_label = _describe_refsrv_processes(refsrv_list)
+    for (p, _), text in zip(refsrv_list, refsrv_texts):
+        entries.append((text, True))
+        procs.append(p)
+    if not refsrv_procs:
+        entries.append(("✗ refsrv.exe (не запущен)", False))
+        procs.append(None)
 
-    if refsrv_same:
-        msg_lines.append("✓ refsrv.exe (текущая директория)")
-    elif refsrv_other:
-        proc, exe_dir = refsrv_other[0]
-        task_label = _get_task_label_for_dir(exe_dir)
-        task_suffix = f"\n  {task_label}" if task_label else ""
-        ports = get_process_listening_ports(proc.pid)
-        if ports:
-            port_info = get_port_info(ports)
-            msg_lines.append(f"⚠ refsrv.exe ({exe_dir}):\n{port_info}{task_suffix}")
-        else:
-            ini_port = get_port_value_for_path(exe_dir)
-            msg_lines.append(f"⚠ refsrv.exe ({exe_dir})\n  Порт из INI: {ini_port or 'не найден'}{task_suffix}")
-    else:
-        msg_lines.append("✗ refsrv.exe (не запущен)")
+    for p, exe_dir in rk7man_list:
+        port_info = "\n".join(line.strip() for line in get_rk7man_port_info(p.pid).splitlines())
+        entries.append((f"rk7man.exe ({exe_dir})" + (f"\n{port_info}" if port_info else ""), True))
+        procs.append(p)
+    if not rk7man_procs:
+        entries.append(("✗ rk7man.exe (не запущен)", False))
+        procs.append(None)
 
-    msg_lines.append("")
-
-    if rk7man_same:
-        msg_lines.append("✓ rk7man.exe (текущая директория)")
-    elif rk7man_other:
-        proc, exe_dir = rk7man_other[0]
-        port_info = get_rk7man_port_info(proc.pid)
-        msg_lines.append(f"⚠ rk7man.exe ({exe_dir}):\n{port_info}")
-    else:
-        msg_lines.append("✗ rk7man.exe (не запущен)")
-
-    msg_lines.append("")
-    msg_lines.append("Закрыть запущенные процессы?")
-
-    answer = centered_askyesno("Закрыть refsrv + rk7man", "\n".join(msg_lines))
-    if not answer:
-        return
-
-    # Закрываем только запущенные процессы
-    for proc in to_close['refsrv']:
-        try:
-            proc.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-    for proc in to_close['rk7man']:
-        try:
-            proc.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+    checked = centered_askchecklist("Закрыть refsrv + rk7man", entries, "Закрыть отмеченные процессы?",
+                                    details=refsrv_ports, details_label=refsrv_ports_label)
+    if checked:
+        _kill_checked(procs, checked)
 
 
 def kill_refsrv_process():
-    """Закрывает refsrv.exe: если запущен — спрашивает и закрывает,
-    если не запущен из текущего ini_path — показывает порт и предлагает закрыть."""
+    """Закрывает refsrv.exe: если запущен из текущего ini_path — закрывает сразу,
+    иначе показывает окно с процессами других версий (флажки — что закрыть)."""
     ini_path_norm = os.path.normpath(ini_path).lower()
     procs = get_process_by_name('refsrv.exe')
 
@@ -3102,19 +2905,12 @@ def kill_refsrv_process():
         return
 
     if other_dir:
-        proc, exe_dir = other_dir[0]
-        task_label = _get_task_label_for_dir(exe_dir)
-        task_suffix = f"\n{task_label}" if task_label else ""
-        ports = get_process_listening_ports(proc.pid)
-        if ports:
-            port_info = get_port_info(ports)
-            msg = f"refsrv.exe запущен:\n{port_info}\n({exe_dir}){task_suffix}\n\nЗакрыть его?"
-        else:
-            ini_port = get_port_value_for_path(exe_dir)
-            msg = f"refsrv.exe запущен ({exe_dir})\nПорт из INI: {ini_port or 'не найден'}{task_suffix}\nЗакрыть его?"
-        answer = centered_askyesno("Закрыть refsrv.exe", msg)
-        if answer:
-            proc.kill()
+        texts, port_details, port_label = _describe_refsrv_processes(other_dir)
+        checked = centered_askchecklist("Закрыть refsrv.exe", [(text, True) for text in texts],
+                                        "Закрыть отмеченные процессы?",
+                                        details=port_details, details_label=port_label)
+        if checked:
+            _kill_checked([p for p, _ in other_dir], checked)
         return
 
     for proc in psutil.process_iter(['pid', 'name']):
