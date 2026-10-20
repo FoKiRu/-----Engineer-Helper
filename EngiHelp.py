@@ -2,18 +2,15 @@
 from tkinter import filedialog, ttk
 from pathlib import Path
 from collections import Counter
-from PyInstaller.utils.hooks import collect_data_files
 from functools import partial
 from datetime import datetime
-from ctypes import wintypes
-from packaging import version
 import tkinter as tk
 import os
 import re
 import shutil
 import traceback
 import json
-import psutil 
+import psutil
 import subprocess
 import time
 import threading
@@ -24,12 +21,113 @@ import tempfile
 import ctypes
 import webbrowser
 import keyboard
-import queue #Улучшенная проверка refsrv.exe
-import webbrowser #Отображения ссылки в тексте
+import queue
 import tkinter.font as tkfont
+from packaging import version
+
+# ======================= Модули (опционально) =======================
+MODULES_AVAILABLE = False
+
+try:
+    # Добавляем родительскую директорию (где лежит папка modules)
+    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+    if os.path.isdir(os.path.join(MODULE_DIR, 'modules')):
+        sys.path.insert(0, MODULE_DIR)
+        try:
+            from modules.data_manager import load_data, save_data, migrate_old_configs, load_settings_and_paths, save_settings_and_path
+            from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
+            from modules.ini_utils import set_port_rk7srv, set_port_rk7man, apply_port
+            from modules.ini_utils import FILES, get_usedbsync_values, detect_consensus_value, get_usesql_value, get_port_value, get_port_value_for_path
+            from modules.ini_utils import get_refserver_name, get_station_server_for_path, update_ini_file, update_rkeeper_ini_basepath
+            from modules.ini_utils import update_rk7srv_ini, get_ini_settings, check_files
+            from modules.process_utils import start_refsrv, start_rk7man, start_midserv, start_wincash
+            from modules.process_utils import kill_refsrv, kill_rk7man, kill_midserv, kill_doscash
+            from modules.process_utils import kill_processes_for_version_change, get_used_ports, get_process_by_name, is_process_running
+            from modules.process_utils import get_port_info, get_rk7man_port_info, get_process_listening_ports
+            from modules.cloud_rk7man import parse_cloud_rk7man_string, apply_cloud_rk7man_config
+            from modules.shortcuts import create_task_shortcuts
+            from modules.task_manager import extract_task_id_from_rk7srv_ini, find_product_root
+            from modules.task_manager import extract_rk_version_from_path, find_available_rk_versions
+            from modules.version_updater import check_rk_updates, download_version, extract_zip
+            from modules.version_updater import find_latest_local_version, compare_versions
+            MODULES_AVAILABLE = True
+            print("[OK] Модули загружены")
+        except ImportError as e:
+            print(f"[WARN] Модули не загружены: {e}")
+except Exception as e:
+    print(f"[WARN] Ошибка загрузки модулей: {e}")
+
+# Используем встроенные константы если модули не загружены
+if not MODULES_AVAILABLE:
+    FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
+
+    def extract_task_id_from_rk7srv_ini(ini_path):
+        if not os.path.exists(ini_path):
+            return None
+        try:
+            with open(ini_path, 'r', encoding='cp1251') as file:
+                for line in file:
+                    line = line.strip()
+                    if line.lower().startswith("udbfile") or line.lower().startswith("workmodules"):
+                        match = re.search(r'([a-zA-Z0-9_]+)[/\\]base[/\\]', line)
+                        if match:
+                            return match.group(1)
+                        match = re.search(r'base_([a-zA-Z0-9_]+)', line)
+                        if match:
+                            return match.group(1)
+        except Exception as e:
+            print(f"Ошибка при чтении rk7srv.INI: {e}")
+        return None
+
+    def find_product_root(selected_path):
+        original = selected_path
+        if os.path.basename(original).lower() == "win":
+            parent = os.path.dirname(original)
+            if os.path.basename(parent).lower() == "bin":
+                root = os.path.dirname(parent)
+            else:
+                return None
+        elif os.path.basename(original).lower() == "bin":
+            root = os.path.dirname(original)
+        else:
+            root = original
+        bin_win = os.path.join(root, "bin", "win")
+        if all(os.path.isfile(os.path.join(bin_win, f)) for f in FILES):
+            return root
+        return None
+
+    def extract_rk_version_from_path(path):
+        product_root = find_product_root(path)
+        if not product_root:
+            return None
+        folder_name = os.path.basename(product_root)
+        match = re.match(r'^INST(.+)$', folder_name, re.IGNORECASE)
+        if match:
+            return match.group(1)
+        return None
+
+    def find_available_rk_versions(path):
+        product_root = find_product_root(path)
+        if not product_root:
+            return []
+        parent_dir = os.path.dirname(product_root)
+        versions = []
+        try:
+            for item in os.listdir(parent_dir):
+                full_path = os.path.join(parent_dir, item)
+                if os.path.isdir(full_path):
+                    match = re.match(r'^INST(.+)$', item, re.IGNORECASE)
+                    if match:
+                        version_str = match.group(1)
+                        bin_win = os.path.join(full_path, "bin", "win")
+                        if os.path.isdir(bin_win):
+                            versions.append(version_str)
+        except Exception as e:
+            print(f"Ошибка сканирования версий: {e}")
+        return versions
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.5.25"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v1.9.7.25"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -46,87 +144,10 @@ DESCRIPTION = (
     "- переключать версию RK и переносить данные между версиями\n"
     "- автоматически сохранять последние пути и настройки\n"
 )
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # путь к скрипту
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # путь к скрипту
 DATA_FILE = os.path.join(str(Path.home()), "Documents", "EngiHelp_data.json")
 OLD_CONFIG_FILE = os.path.join(str(Path.home()), "Documents", "EngiHelp_config.json")
 OLD_TASKS_FILE = os.path.join(str(Path.home()), "Documents", "tasks.json")
-FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
-
-# ======================= Работа с единым файлом данных =======================
-
-def load_data():
-    """Загружает данные из единого JSON-файла."""
-    if not os.path.exists(DATA_FILE):
-        return {"settings": {"auto_update": True, "task_from_version": False, "keep_cloud_files": False, "recent_paths": []}, "tasks": {}}
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            # Убедимся, что все ключи на месте
-            if "settings" not in data:
-                data["settings"] = {"auto_update": True, "task_from_version": False, "keep_cloud_files": False, "recent_paths": []}
-            if "keep_cloud_files" not in data["settings"]:
-                data["settings"]["keep_cloud_files"] = False
-            if "tasks" not in data:
-                data["tasks"] = {}
-            return data
-    except (json.JSONDecodeError, IOError):
-        # В случае ошибки возвращаем пустую структуру
-        return {"settings": {"auto_update": True, "task_from_version": False, "keep_cloud_files": False, "recent_paths": []}, "tasks": {}}
-
-def save_data(data):
-    """Сохраняет данные в единый JSON-файл."""
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-    except IOError as e:
-        print(f"Ошибка сохранения данных: {e}")
-
-def migrate_old_configs():
-    """
-    Проверяет наличие старых файлов конфигурации и переносит их данные в новый
-    единый файл, если он еще не существует.
-    """
-    if os.path.exists(DATA_FILE):
-        return # Новый файл уже есть, миграция не нужна
-
-    print("Миграция старых конфигурационных файлов...")
-    new_data = {"settings": {"auto_update": True, "task_from_version": False, "recent_paths": []}, "tasks": {}}
-    migrated = False
-
-    # Миграция из EngiHelp_config.json
-    if os.path.exists(OLD_CONFIG_FILE):
-        try:
-            with open(OLD_CONFIG_FILE, "r", encoding="utf-8") as f:
-                config = json.load(f)
-                new_data["settings"]["auto_update"] = config.get("auto_update", True)
-                paths = [
-                    v for k, v in sorted(config.items())
-                    if k.startswith("ini_dir") and isinstance(v, str) and v.strip()
-                ]
-                new_data["settings"]["recent_paths"] = paths
-                migrated = True
-        except Exception as e:
-            print(f"Не удалось мигрировать {OLD_CONFIG_FILE}: {e}")
-
-    # Миграция из tasks.json
-    if os.path.exists(OLD_TASKS_FILE):
-        try:
-            with open(OLD_TASKS_FILE, "r", encoding="utf-8") as f:
-                tasks = json.load(f)
-                new_data["tasks"] = tasks
-                migrated = True
-        except Exception as e:
-            print(f"Не удалось мигрировать {OLD_TASKS_FILE}: {e}")
-
-    if migrated:
-        save_data(new_data)
-        print("Миграция завершена. Создан новый файл: EngiHelp_data.json")
-        # Опционально: удалить старые файлы после успешной миграции
-        # if os.path.exists(OLD_CONFIG_FILE): os.remove(OLD_CONFIG_FILE)
-        # if os.path.exists(OLD_TASKS_FILE): os.remove(OLD_TASKS_FILE)
-
-# Вызываем миграцию при старте программы
-migrate_old_configs()
 
 # ======================= Проверка URL файла .gitignore на GitHub =======================
 GITHUB_URL = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/.gitignore"
@@ -223,15 +244,7 @@ settings_tab = tk.Frame(notebook)
 notebook.add(settings_tab, text="Параметры")
 
 # =================== Работа с EngiHelp_config.json (мульти-пути) =============
-def load_settings_and_paths():
-    data = load_data()
-    settings = data.get("settings", {})
-    paths = settings.get("recent_paths", [])
-    auto_update = settings.get("auto_update", True)
-    task_from_version = settings.get("task_from_version", True)
-    keep_cloud_files = settings.get("keep_cloud_files", True)
-    return paths, auto_update, task_from_version, keep_cloud_files
-
+# load_settings_and_paths импортирована из modules.data_manager
 
 def save_settings_and_path(new_path):
     new_path = new_path.replace("\\", "/")
@@ -257,86 +270,19 @@ def save_settings_and_path(new_path):
     # Обновляем выпадающий список в интерфейсе
     if 'path_entry' in globals():
         path_entry['values'] = data["settings"]["recent_paths"]
-
-
-def find_latest_task_for_path(target_path):
-    """Находит самый последний сохраненный ID задачи для указанного пути."""
-    data = load_data()
-    tasks = data.get("tasks", {})
-    
-    # Задачи уже отсортированы (самая новая вверху) благодаря логике сохранения.
-    # Поэтому первый найденный результат и будет самым последним.
-    for task_id, task_info in tasks.items():
-        if task_info.get("ini_path") == target_path:
-            return task_id  # Нашли, возвращаем ID
-            
-    return None  # Для этого пути задач не найдено
-
-def find_tasks_for_path(target_path):
-    """
-    Находит ВСЕ сохранённые ID задач, привязанные к указанному пути версии.
-    Учитывает как основной ini_path задачи, так и пути из её versions.
-    Порядок сохраняется как в файле данных (самая свежая задача — первая).
-    """
-    if not target_path:
-        return []
-
-    def _norm(p):
-        return os.path.normpath(p).replace("\\", "/").lower() if p else ""
-
-    target_norm = _norm(target_path)
-    data = load_data()
-    tasks = data.get("tasks", {})
-
-    found = []
-    for task_id, task_info in tasks.items():
-        paths = {_norm(task_info.get("ini_path"))}
-        for ver_info in task_info.get("versions", {}).values():
-            paths.add(_norm(ver_info.get("ini_path")))
-        if target_norm in paths:
-            found.append(task_id)
-
-    return found
-
-def get_current_task_base_path(task_id):
-    """Возвращает путь к папке base для указанного ID задачи."""
-    if not task_id:
-        return None
-    data = load_data()
-    task_info = data.get("tasks", {}).get(task_id)
-    if not task_info:
-        return None
-    return task_info.get("base_path")
-
-# ======================= Вспомогательные функции =======================
-def extract_task_id_from_rk7srv_ini(ini_path):
-    if not os.path.exists(ini_path):
-        return None
-    try:
-        with open(ini_path, 'r', encoding='cp1251') as file:
-            for line in file:
-                line = line.strip()
-                if line.lower().startswith("udbfile") or line.lower().startswith("workmodules"):
-                    # Новый формат: ..\..\{task_id}\base\...
-                    match = re.search(r'([a-zA-Z0-9_]+)[/\\]base[/\\]', line)
-                    if match:
-                        return match.group(1)
-                    # Старый формат (обратная совместимость): base_{task_id}
-                    match = re.search(r'base_([a-zA-Z0-9_]+)', line)
-                    if match:
-                        return match.group(1)
-    except Exception as e:
-        print(f"Ошибка при чтении rk7srv.INI: {e}")
-    return None
+# find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path импортированы из modules.data_manager
+# extract_task_id_from_rk7srv_ini, find_product_root, extract_rk_version_from_path, find_available_rk_versions импортированы из modules.task_manager
 
 # ======================= Определение путей и начальных переменных =======================
-ini_paths, auto_update_enabled, task_from_version_enabled, keep_cloud_files_enabled = load_settings_and_paths()
+ini_paths, auto_update_enabled, task_from_version_enabled, keep_cloud_files_enabled, delete_zip_after_extract_enabled = load_settings_and_paths()
 ini_path = ini_paths[0] if ini_paths else ""
 auto_update_var = tk.BooleanVar(value=auto_update_enabled)
 # Флаг "Выбор задачи из выбора версии": при смене версии RK предлагать выбрать задачу
 task_from_version_var = tk.BooleanVar(value=task_from_version_enabled)
 # Флаг "Сохранять временные файлы Cloud RK7man": не удалять .ini после запуска
 keep_cloud_files_var = tk.BooleanVar(value=keep_cloud_files_enabled)
+# Флаг "Удалять ZIP после распаковки"
+delete_zip_after_extract_var = tk.BooleanVar(value=delete_zip_after_extract_enabled)
 INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
 
 # Создаём task_id_var ЗДЕСЬ, до первого использования
@@ -371,279 +317,16 @@ def open_task_in_sd():
     else:
         centered_warning("Предупреждение", "Номер задачи не найден")
 
-
-# ======================= Логика определения корня продукта =======================
-def find_product_root(selected_path):
-    """
-    Определяет корневую папку продукта (например INST0.00.0.0000)
-    и проверяет наличие INI-файлов в bin/win.
-    Возвращает путь к корню продукта или None.
-    """
-    original = selected_path
-
-    # Если выбран bin/win — поднимаемся на два уровня
-    if os.path.basename(original).lower() == "win":
-        parent = os.path.dirname(original)
-        if os.path.basename(parent).lower() == "bin":
-            root = os.path.dirname(parent)
-        else:
-            return None
-    # Если выбран bin — поднимаемся на один уровень
-    elif os.path.basename(original).lower() == "bin":
-        root = os.path.dirname(original)
-    # Если сразу INST7... — проверим, есть ли bin/win
-    else:
-        root = original
-
-    bin_win = os.path.join(root, "bin", "win")
-    if all(os.path.isfile(os.path.join(bin_win, f)) for f in FILES):
-        return root
-
-    return None
-
-# ======================= Работа с INI-файлами =======================
-def get_usedbsync_values():
-    values = {}
-    for filename in FILES:
-        path = os.path.join(ini_path, filename)
-        if not os.path.isfile(path):
-            continue
-        try:
-            try:
-                with open(path, 'r', encoding='utf-8') as file:
-                    lines = file.readlines()
-            except UnicodeDecodeError:
-                with open(path, 'r', encoding='cp1251') as file:
-                    lines = file.readlines()
-            found = False
-            for line in lines:
-                match = re.match(r'^\s*UseDBSync\s*=\s*(\d+)', line, re.IGNORECASE)
-                if match:
-                    values[filename] = match.group(1)
-                    found = True
-                    break
-            if not found and filename != "rk7srv.INI":
-                values[filename] = "1"
-        except Exception:
-            continue
-    return values
-
-def detect_consensus_value():
-    values = get_usedbsync_values()
-    if not values:
-        return "0"
-    counts = Counter(values.values())
-    consensus = counts.most_common(1)[0][0]
-    for filename, value in values.items():
-        if value != consensus:
-            full_path = os.path.join(ini_path, filename)
-            update_ini_file(full_path, consensus, "UseDBSync")
-    return consensus
-
-def get_usesql_value():
-    if not os.path.isfile(INI_FILE_USESQL):
-        return "0"
-    try:
-        try:
-            with open(INI_FILE_USESQL, 'r', encoding='utf-8') as file:
-                lines = file.readlines()
-        except UnicodeDecodeError:
-            with open(INI_FILE_USESQL, 'r', encoding='cp1251') as file:
-                lines = file.readlines()
-        for line in lines:
-            match = re.match(r'^\s*USESQL\s*=\s*(\d+)', line, re.IGNORECASE)
-            if match:
-                return match.group(1)
-    except Exception:
-        pass
-    return "0"
-
-def get_port_value():
-    """Читает PORT из секции [TCPSOC] файла rk7srv.INI."""
-    rk7srv_path = os.path.join(ini_path, "rk7srv.INI")
-    if not os.path.isfile(rk7srv_path):
-        return ""
-    try:
-        try:
-            with open(rk7srv_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-        except UnicodeDecodeError:
-            with open(rk7srv_path, 'r', encoding='cp1251') as f:
-                lines = f.readlines()
-        in_tcpsoc = False
-        for line in lines:
-            stripped = line.strip()
-            if re.match(r'^\[TCPSOC\]', stripped, re.IGNORECASE):
-                in_tcpsoc = True
-                continue
-            if in_tcpsoc:
-                if stripped.startswith('['):
-                    break
-                m = re.match(r'^\s*PORT\s*=\s*(\d+)', stripped, re.IGNORECASE)
-                if m:
-                    return m.group(1)
-    except Exception:
-        pass
-    return ""
-
-def get_refserver_name():
-    """Читает имя сервера из [REFSERVER] Server = ... в rk7srv.INI."""
-    rk7srv_path = os.path.join(ini_path, "rk7srv.INI")
-    if not os.path.isfile(rk7srv_path):
-        return ""
-    try:
-        try:
-            with open(rk7srv_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-        except UnicodeDecodeError:
-            with open(rk7srv_path, 'r', encoding='cp1251') as f:
-                lines = f.readlines()
-        in_refserver = False
-        for line in lines:
-            stripped = line.strip()
-            if re.match(r'^\[REFSERVER\]', stripped, re.IGNORECASE):
-                in_refserver = True
-                continue
-            if in_refserver:
-                if stripped.startswith('['):
-                    break
-                m = re.match(r'^\s*Server\s*=\s*(\S+)', stripped, re.IGNORECASE)
-                if m:
-                    return m.group(1).strip()
-    except Exception:
-        pass
-    return ""
-
-def set_port_rk7srv(ini_path_val, port):
-    """Устанавливает PORT=port в секции [TCPSOC] файла rk7srv.INI."""
-    rk7srv_path = os.path.join(ini_path_val, "rk7srv.INI")
-    if not os.path.isfile(rk7srv_path):
-        return False
-    try:
-        try:
-            with open(rk7srv_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            enc = 'utf-8'
-        except UnicodeDecodeError:
-            with open(rk7srv_path, 'r', encoding='cp1251') as f:
-                lines = f.readlines()
-            enc = 'cp1251'
-
-        new_lines = []
-        in_tcpsoc = False
-        port_updated = False
-        tcpsoc_found = False
-
-        for line in lines:
-            stripped = line.strip()
-            if re.match(r'^\[TCPSOC\]', stripped, re.IGNORECASE):
-                in_tcpsoc = True
-                tcpsoc_found = True
-                new_lines.append(line)
-                continue
-            if in_tcpsoc:
-                if stripped.startswith('['):
-                    # Выходим из секции — если PORT не нашли, добавляем перед новой секцией
-                    if not port_updated:
-                        new_lines.append(f"PORT={port}\n")
-                        port_updated = True
-                    in_tcpsoc = False
-                elif re.match(r'^\s*PORT\s*=', stripped, re.IGNORECASE):
-                    new_lines.append(f"PORT={port}\n")
-                    port_updated = True
-                    continue
-            new_lines.append(line)
-
-        if not tcpsoc_found:
-            new_lines.append(f"\n[TCPSOC]\nPORT={port}\n")
-        elif not port_updated:
-            new_lines.append(f"PORT={port}\n")
-
-        shutil.copy2(rk7srv_path, rk7srv_path + ".bak")
-        with open(rk7srv_path, 'w', encoding=enc) as f:
-            f.writelines(new_lines)
-        return True
-    except Exception as e:
-        print(f"[ERR] set_port_rk7srv: {e}")
-        return False
-
-def set_port_rk7man(ini_path_val, server_name, port):
-    """Устанавливает {server_name}=127.0.0.1:{port} в секции [TCPDNS] файла rk7man.ini."""
-    rk7man_path = os.path.join(ini_path_val, "rk7man.ini")
-    if not os.path.isfile(rk7man_path):
-        return False
-    try:
-        try:
-            with open(rk7man_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            enc = 'utf-8'
-        except UnicodeDecodeError:
-            with open(rk7man_path, 'r', encoding='cp1251') as f:
-                lines = f.readlines()
-            enc = 'cp1251'
-
-        new_lines = []
-        in_tcpdns = False
-        entry_updated = False
-        tcpdns_found = False
-
-        for line in lines:
-            stripped = line.strip()
-            if re.match(r'^\[TCPDNS\]', stripped, re.IGNORECASE):
-                in_tcpdns = True
-                tcpdns_found = True
-                new_lines.append(line)
-                continue
-            if in_tcpdns:
-                if stripped.startswith('['):
-                    if not entry_updated:
-                        new_lines.append(f"{server_name}=127.0.0.1:{port}\n")
-                        entry_updated = True
-                    in_tcpdns = False
-                elif re.match(rf'^\s*{re.escape(server_name)}\s*=', stripped, re.IGNORECASE):
-                    new_lines.append(f"{server_name}=127.0.0.1:{port}\n")
-                    entry_updated = True
-                    continue
-            new_lines.append(line)
-
-        if not tcpdns_found:
-            new_lines.append(f"\n[TCPDNS]\n{server_name}=127.0.0.1:{port}\n")
-        elif not entry_updated:
-            new_lines.append(f"{server_name}=127.0.0.1:{port}\n")
-
-        shutil.copy2(rk7man_path, rk7man_path + ".bak")
-        with open(rk7man_path, 'w', encoding=enc) as f:
-            f.writelines(new_lines)
-        return True
-    except Exception as e:
-        print(f"[ERR] set_port_rk7man: {e}")
-        return False
-
-def apply_port(ini_path_val, port):
-    """Применяет порт в rk7srv.INI [TCPSOC] и rk7man.ini [TCPDNS]."""
-    if not port:
-        return
-    server_name = get_refserver_name()
-    ok1 = set_port_rk7srv(ini_path_val, port)
-    if server_name:
-        ok2 = set_port_rk7man(ini_path_val, server_name, port)
-    else:
-        ok2 = False
-        print("[WARN] apply_port: имя сервера из [REFSERVER] не найдено, rk7man.ini не обновлён")
-    print(f"[PORT] rk7srv={ok1}, rk7man={ok2}, server='{server_name}', port={port}")
+# ======================= Работа с INI-файлами (импортировано из modules.ini_utils) =======================
 
 # ======================= Cloud RK7man =======================
 CLOUD_RK7MAN_PATTERN = re.compile(r'^([A-Za-z0-9_]+)\s*=\s*([^\s:=]+):(\d{1,5})$')
 CLOUD_CONNECTIONS_FILE = "cloud_connections.txt"
 MAX_SAVED_CONNECTIONS = 5
 
-def get_cloud_connections_file_path():
-    """Возвращает путь к файлу cloud_connections.txt в корне папки версии RK (рядом с INI)."""
-    return os.path.join(ini_path, CLOUD_CONNECTIONS_FILE)
-
-def load_saved_cloud_connections():
+def load_saved_cloud_connections(ini_path):
     """Загружает сохранённые строки подключения из файла (максимум 5)."""
-    file_path = get_cloud_connections_file_path()
+    file_path = os.path.join(ini_path, CLOUD_CONNECTIONS_FILE)
     if not os.path.isfile(file_path):
         return []
     try:
@@ -653,10 +336,10 @@ def load_saved_cloud_connections():
     except Exception:
         return []
 
-def save_cloud_connection(connection_string):
+def save_cloud_connection(ini_path, connection_string):
     """Сохраняет строку подключения, удаляя дубликаты и оставляя 5 последних."""
-    file_path = get_cloud_connections_file_path()
-    connections = load_saved_cloud_connections()
+    file_path = os.path.join(ini_path, CLOUD_CONNECTIONS_FILE)
+    connections = load_saved_cloud_connections(ini_path)
 
     # Удаляем дубликат если есть
     connections = [c for c in connections if c != connection_string]
@@ -673,20 +356,6 @@ def save_cloud_connection(connection_string):
     except Exception as e:
         print(f"[WARN] Не удалось сохранить подключение: {e}")
 
-
-def parse_cloud_rk7man_string(raw):
-    """Разбирает строку вида RK7SRV_622020001=srv01.rkcloud.ucs.ru:50072.
-    Возвращает (server_name, host, port) или None, если формат не подходит."""
-    if not raw:
-        return None
-    m = CLOUD_RK7MAN_PATTERN.match(raw.strip())
-    if not m:
-        return None
-    server_name, host, port_str = m.group(1), m.group(2), m.group(3)
-    port = int(port_str)
-    if not (1 <= port <= 65535):
-        return None
-    return server_name, host, port
 
 def apply_cloud_rk7man_config(ini_path_val, server_name, host, port):
     """Читает rk7man.ini, применяет облачные настройки в памяти и записывает
@@ -800,7 +469,7 @@ def launch_cloud_rk7man(tmp_ini_path, version_ini_path=None):
         return
 
     ini_path_norm = os.path.normpath(target_ini).lower()
-    for proc, exe_dir in _get_process_by_name('rk7man.exe'):
+    for proc, exe_dir in get_process_by_name('rk7man.exe'):
         if exe_dir == ini_path_norm:
             try:
                 proc.terminate()
@@ -843,7 +512,7 @@ def cloud_rk7man_dialog():
     frame = tk.Frame(win)
     frame.pack(fill="both", expand=True)
 
-    saved_connections = load_saved_cloud_connections()
+    saved_connections = load_saved_cloud_connections(ini_path)
     history_values = [""] + saved_connections
 
     tk.Label(
@@ -1002,7 +671,7 @@ def cloud_rk7man_dialog():
         server_name, host, port = parsed
         connection_string = connection_var.get().strip()
 
-        save_cloud_connection(connection_string)
+        save_cloud_connection(ini_path, connection_string)
 
         target_ini = get_target_ini_path()
         if target_ini is None:
@@ -1027,8 +696,8 @@ def cloud_rk7man_dialog():
             )
             return
         connection_string = connection_var.get().strip()
-        save_cloud_connection(connection_string)
-        connection_combo['values'] = [""] + load_saved_cloud_connections()
+        save_cloud_connection(ini_path, connection_string)
+        connection_combo['values'] = [""] + load_saved_cloud_connections(ini_path)
         connection_combo.set("")
         centered_info("Сохранено", "Подключение сохранено в историю.")
 
@@ -1066,146 +735,8 @@ def cloud_rk7man_dialog():
     win.deiconify()
 # ======================= Конец Cloud RK7man =======================
 
-def update_ini_file(filepath, value, key):
-    try:
-        # Создаем бэкап только если файл существует
-        if os.path.exists(filepath):
-            shutil.copy2(filepath, filepath + ".bak")
-        
-        lines = []
-        # Пытаемся прочитать файл, если он существует
-        if os.path.exists(filepath):
-            try:
-                with open(filepath, 'r', encoding='utf-8') as file:
-                    lines = file.readlines()
-            except UnicodeDecodeError:
-                with open(filepath, 'r', encoding='cp1251') as file:
-                    lines = file.readlines()
-
-        updated = False
-        new_lines = []
-        key_found = False
-        dbsync_section_exists = False
-
-        # Проверяем наличие секции [DBSYNC]
-        for line in lines:
-            if re.match(r'^\s*\[DBSYNC\]\s*$', line, re.IGNORECASE): # ИСПРАВЛЕНО
-                dbsync_section_exists = True
-                break
-
-        # Обновляем или добавляем строки
-        for line in lines:
-            if re.match(fr'^\s*{key}\s*=.*', line, re.IGNORECASE):
-                new_lines.append(f"{key}={value}\n")
-                key_found = True
-                updated = True
-            else:
-                new_lines.append(line)
-
-        # Если ключ не найден, добавляем его
-        if not key_found:
-            # Если секции [DBSYNC] нет, добавляем ее
-            if not dbsync_section_exists:
-                # Добавляем пустую строку перед секцией для красоты
-                if new_lines and not new_lines[-1].endswith('\n'):
-                    new_lines.append('\n')
-                new_lines.append("\n[DBSYNC]\n")
-            
-            # Ищем место для вставки параметра (сразу после [DBSYNC])
-            inserted = False
-            final_lines = []
-            for line in new_lines:
-                final_lines.append(line)
-                if re.match(r'^\s*\[DBSYNC\]\s*$', line, re.IGNORECASE): # ИСПРАВЛЕНО
-                    final_lines.append(f"{key}={value}\n")
-                    inserted = True
-            
-            if inserted:
-                new_lines = final_lines
-            else: # Если секция была добавлена в конец, просто добавляем ключ
-                 new_lines.append(f"{key}={value}\n")
-
-            updated = True
-
-        # Записываем изменения в файл
-        with open(filepath, 'w', encoding='cp1251') as file:
-            file.writelines(new_lines)
-
-        return updated
-
-    except Exception as e:
-        print(f"[ОШИБКА] {filepath}: {e}")
-        traceback.print_exc()
-        return False
-
-def update_rkeeper_ini_basepath(ini_path, midbase_folder_name):
-    """Обновляет параметр BasePath в секции [Config] файла RKEEPER.INI."""
-    rkeeper_path = os.path.join(ini_path, "RKEEPER.INI")
-    if not os.path.isfile(rkeeper_path):
-        print(f"[WARN] RKEEPER.INI не найден: {rkeeper_path}")
-        return False
-    try:
-        try:
-            with open(rkeeper_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-        except UnicodeDecodeError:
-            with open(rkeeper_path, 'r', encoding='cp1251') as f:
-                lines = f.readlines()
-
-        new_lines = []
-        updated = False
-        for line in lines:
-            if re.match(r'^\s*BasePath\s*=', line, re.IGNORECASE):
-                new_lines.append(f"BasePath = ..\\..\\{midbase_folder_name}\n")
-                updated = True
-            else:
-                new_lines.append(line)
-
-        # Если параметр не найден — добавляем в секцию [Config]
-        if not updated:
-            final_lines = []
-            in_config = False
-            inserted = False
-            for line in new_lines:
-                final_lines.append(line)
-                if re.match(r'^\s*\[Config\]\s*$', line, re.IGNORECASE):
-                    in_config = True
-                elif in_config and re.match(r'^\s*\[', line) and not inserted:
-                    # Вставляем перед следующей секцией
-                    final_lines.insert(-1, f"BasePath = ..\\..\\{midbase_folder_name}\n")
-                    inserted = True
-                    in_config = False
-            if not inserted:
-                final_lines.append(f"BasePath = ..\\..\\{midbase_folder_name}\n")
-            new_lines = final_lines
-
-        with open(rkeeper_path, 'w', encoding='cp1251') as f:
-            f.writelines(new_lines)
-
-        print(f"[OK] RKEEPER.INI обновлён: BasePath = ..\\..\\{midbase_folder_name}")
-        return True
-    except Exception as e:
-        print(f"[ERROR] Ошибка обновления RKEEPER.INI: {e}")
-        return False
-
-def check_files():
-    found, missing = [], []
-    for filename in FILES:
-        full_path = os.path.join(ini_path, filename)
-        """
-        # 🔍 DEBUG: печатаем путь и факт существования
-        print(f"[DEBUG] Проверяем файл: {filename} => {full_path}")
-        print(f"[DEBUG] Существует? {'Да' if os.path.isfile(full_path) else 'Нет'}")
-        """
-        if os.path.isfile(full_path):
-            found.append(filename)
-        else:
-            missing.append(filename)
-
-    return found, missing
-
 def on_check():
-    found, missing = check_files()
+    found, missing = check_files(ini_path)
     filtered_missing = [f for f in missing if f.lower() != "rk7man.ini"]
     
     # Отключаем кнопки, если файлы отсутствуют
@@ -1218,9 +749,9 @@ def on_check():
         usedbsync_cb.config(state="normal", fg="black")
         usesql_cb.config(state="normal", fg="black")
         clear_base_btn.config(state="normal")  # Включаем кнопку "Clear Base"
-        usedbsync_var.set(int(detect_consensus_value()))
-        usesql_var.set(int(get_usesql_value()))
-        port_var.set(get_port_value())
+        usedbsync_var.set(int(detect_consensus_value(ini_path)))
+        usesql_var.set(int(get_usesql_value(ini_path)))
+        port_var.set(get_port_value(ini_path))
         return True
 
 # ============================================================
@@ -1893,84 +1424,9 @@ def on_task_selected(event):
 
     print(f"Параметры для задачи {selected_task_id} применены!")
 
-# Функция по обновлению rk7srv.INI для директории по задачи
-# base_dir теперь ожидается в формате "{task_id}\\base"
-def update_rk7srv_ini(ini_path, base_dir):
-    try:
-        # Читаем файл в кодировке cp1251
-        with open(ini_path, 'r', encoding='cp1251') as file:
-            lines = file.readlines()
-
-        new_lines = []
-        for line in lines:
-            # Ищем строки, начинающиеся с UDBFILE или WorkModules, игнорируя пробелы
-            if re.match(r'^\s*UDBFILE\s*=', line, re.IGNORECASE):
-                new_lines.append(f"UDBFILE            = ..\\..\\{base_dir}\\rk7.udb\n")
-            elif re.match(r'^\s*WorkModules\s*=', line, re.IGNORECASE):
-                new_lines.append(f"WorkModules        = ..\\..\\{base_dir}\\workmods\n")
-            else:
-                new_lines.append(line)
-
-        # Сохраняем изменения
-        with open(ini_path, 'w', encoding='cp1251') as file:
-            file.writelines(new_lines)
-
-        print("Файл успешно обновлён!")
-    except Exception as e:
-        print(f"Ошибка при обновлении файла: {e}")
-
+# extract_rk_version_from_path и find_available_rk_versions импортированы из modules.task_manager
 
 # ======================= Смена версии RK =======================
-
-def extract_rk_version_from_path(path):
-    """Извлекает версию RK из имени папки INST в пути."""
-    product_root = find_product_root(path)
-    if not product_root:
-        return None
-    folder_name = os.path.basename(product_root)
-    match = re.match(r'^INST(.+)$', folder_name, re.IGNORECASE)
-    if match:
-        return match.group(1)
-    return None
-
-
-def find_available_rk_versions(path):
-    """Находит все доступные версии INST в родительской директории."""
-    product_root = find_product_root(path)
-    if not product_root:
-        return []
-    parent_dir = os.path.dirname(product_root)
-    versions = []
-    try:
-        for item in os.listdir(parent_dir):
-            full_path = os.path.join(parent_dir, item)
-            if os.path.isdir(full_path):
-                match = re.match(r'^INST(.+)$', item, re.IGNORECASE)
-                if match:
-                    version_str = match.group(1)
-                    bin_win = os.path.join(full_path, "bin", "win")
-                    if os.path.isdir(bin_win):
-                        versions.append(version_str)
-    except Exception as e:
-        print(f"Ошибка сканирования версий: {e}")
-    return versions
-
-
-def kill_processes_for_version_change():
-    """Завершает процессы refsrv.exe и rk7man.exe."""
-    killed = []
-    for proc in psutil.process_iter(['pid', 'name']):
-        try:
-            name = proc.info['name']
-            if name and name.lower() in ('refsrv.exe', 'rk7man.exe'):
-                proc.terminate()
-                killed.append(name)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    if killed:
-        time.sleep(2)
-    return killed
-
 
 def change_rk_version():
     """Главная функция кнопки 'Сменить версию RK'."""
@@ -2103,6 +1559,114 @@ def change_rk_version():
     ), fg="red", font=("TkDefaultFont", 8))
     warning_label.pack(padx=10, pady=(5, 0))
 
+    # Блок проверки обновлений
+    update_frame = tk.Frame(frame)
+    update_frame.pack(fill="x", padx=10, pady=(5, 0))
+
+    update_status_var = tk.StringVar(value="")
+    update_status_label = tk.Label(update_frame, textvariable=update_status_var, fg="green", font=("TkDefaultFont", 8))
+    update_status_label.pack(side="left")
+
+    checking_label = tk.Label(update_frame, text="Проверяем облако...", fg="gray", font=("TkDefaultFont", 8))
+
+    def on_check_updates():
+        """Проверяет наличие обновлений в облаке."""
+        update_status_var.set("")
+        checking_label.pack(side="left")
+        btn_check_update.config(state="disabled")
+        select_win.update()
+
+        try:
+            update_info = check_rk_updates(available_versions, current_version)
+            checking_label.pack_forget()
+
+            if update_info:
+                latest = update_info['latest_version']
+                update_status_var.set(f"✅ Доступна новая версия: {latest}")
+                update_status_label.config(fg="green")
+
+                if centered_askyesno("Обновление", (
+                    f"Доступна новая версия RK: {latest}\n"
+                    f"Текущая локальная: {update_info['current_version']}\n\n"
+                    f"Скачать версию {latest}?"
+                )):
+                    on_download_update(update_info)
+            else:
+                update_status_var.set("✅ У вас последняя версия")
+                update_status_label.config(fg="gray")
+
+        except Exception as e:
+            checking_label.pack_forget()
+            update_status_var.set(f"❌ Ошибка проверки: {str(e)[:50]}")
+            update_status_label.config(fg="red")
+            print(f"[ERROR] Проверка обновлений: {e}")
+
+        btn_check_update.config(state="normal")
+
+    def on_download_update(update_info):
+        """Скачивает обновление из облака."""
+        zip_name = update_info['zip_name']
+        download_path = update_info['download_path']
+
+        # Спрашиваем куда сохранить
+        target_dir = filedialog.askdirectory(
+            title="Выберите папку для сохранения версии",
+            initialdir=versions_search_dir
+        )
+        if not target_dir:
+            return
+
+        # Скачиваем
+        def progress_callback(filename, downloaded, total):
+            percent = int(downloaded * 100 / total) if total > 0 else 0
+            update_status_var.set(f"📥 Скачивается: {percent}%")
+            select_win.update()
+
+        update_status_var.set(f"📥 Скачивается: 0%")
+        update_status_label.config(fg="blue")
+        btn_check_update.config(state="disabled")
+        btn_transfer.config(state="disabled")
+        select_win.update()
+
+        success, result = download_version(download_path, zip_name, target_dir, progress_callback)
+
+        if success:
+            # Распаковываем
+            update_status_var.set("📦 Распаковка...")
+            select_win.update()
+
+            success, extracted = extract_zip(result, target_dir, delete_zip_after_extract_var.get())
+            if success:
+                update_status_var.set(f"✅ Готово: {extracted}")
+                update_status_label.config(fg="green")
+
+                # Обновляем список версий
+                if extracted:
+                    new_path = os.path.join(target_dir, extracted)
+                    if os.path.isdir(new_path):
+                        search_dir_var.set(target_dir)
+                        on_browse_version_dir()
+
+                centered_info("Успех", f"Версия {update_info['latest_version']} скачана и распакована:\n{os.path.join(target_dir, extracted)}")
+            else:
+                update_status_var.set(f"❌ Ошибка распаковки: {extracted}")
+                update_status_label.config(fg="red")
+                centered_error("Ошибка", f"Не удалось распаковать:\n{extracted}")
+        else:
+            update_status_var.set(f"❌ Ошибка скачивания")
+            update_status_label.config(fg="red")
+            centered_error("Ошибка", f"Не удалось скачать:\n{result}")
+
+        btn_check_update.config(state="normal")
+        btn_transfer.config(state="normal")
+
+    # Кнопка проверки обновлений (запускаем сразу при открытии)
+    btn_check_update = tk.Button(frame, text="🔄 Проверить обновления", command=on_check_updates, width=20)
+    btn_check_update.pack(pady=(5, 0))
+
+    # Запускаем проверку через небольшую задержку
+    select_win.after(200, on_check_updates)
+
     def on_confirm():
         target_version = version_var.get()
         if not target_version:
@@ -2114,7 +1678,8 @@ def change_rk_version():
 
     btn_frame = tk.Frame(frame)
     btn_frame.pack(pady=(5, 10))
-    tk.Button(btn_frame, text="Перенести", command=on_confirm, width=12).pack(side="left", padx=5)
+    btn_transfer = tk.Button(btn_frame, text="Перенести", command=on_confirm, width=12)
+    btn_transfer.pack(side="left", padx=5)
     tk.Button(btn_frame, text="Отмена", command=select_win.destroy, width=12).pack(side="left", padx=5)
 
     _center_window(select_win)
@@ -2956,142 +2521,6 @@ def save_task_id_to_file():
         centered_error("Ошибка", f"Не удалось сохранить номер задачи:\n{e}")
 """
 
-def get_usedbsync_values_for_path(path):
-    """Читает UseDBSync из всех INI-файлов для указанного пути."""
-    values = {}
-    for filename in FILES:
-        file_path = os.path.join(path, filename)
-        if os.path.isfile(file_path):
-            try:
-                value = _read_ini_key(file_path, "UseDBSync", "DBSYNC")
-                values[filename] = value if value else "0"
-            except Exception:
-                values[filename] = "0"
-    return values
-
-def get_usesql_value_for_path(ini_path_val):
-    """Читает USESQL из rk7srv.INI для указанного пути."""
-    rk7srv_path = os.path.join(ini_path_val, "rk7srv.INI")
-    if not os.path.isfile(rk7srv_path):
-        return "0"
-    try:
-        value = _read_ini_key(rk7srv_path, "USESQL", None)
-        return value if value else "0"
-    except Exception:
-        return "0"
-
-def get_port_value_for_path(ini_path_val):
-    """Читает PORT из секции [TCPSOC] файла rk7srv.INI для указанного пути."""
-    rk7srv_path = os.path.join(ini_path_val, "rk7srv.INI")
-    if not os.path.isfile(rk7srv_path):
-        return ""
-    try:
-        return _read_ini_key(rk7srv_path, "PORT", "TCPSOC") or ""
-    except Exception:
-        return ""
-
-def _read_ini_key(filepath, key, section):
-    """Читает значение ключа key из секции section файла filepath."""
-    try:
-        with open(filepath, 'r', encoding='cp1251') as f:
-            in_section = section is None
-            for line in f:
-                line = line.strip()
-                if section and re.match(rf'^\[{section}\]\s*$', line, re.IGNORECASE):
-                    in_section = True
-                    continue
-                if section and re.match(r'^\[.*\]\s*$', line):
-                    in_section = False
-                if in_section and re.match(rf'^\s*{key}\s*=\s*(.*)$', line, re.IGNORECASE):
-                    return line.split('=', 1)[1].strip()
-    except Exception:
-        pass
-    return None
-
-def get_station_server_for_path(ini_path_val):
-    """Читает Station и Server из wincash.ini для указанного пути."""
-    wincash_path = os.path.join(ini_path_val, "wincash.ini")
-    station, server = "", ""
-    if os.path.isfile(wincash_path):
-        try:
-            with open(wincash_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-        except UnicodeDecodeError:
-            with open(wincash_path, 'r', encoding='cp1251') as f:
-                content = f.read()
-        for line in content.splitlines():
-            l = line.strip()
-            if l.lower().startswith("station="):
-                station = l.split("=", 1)[-1].strip()
-            elif l.lower().startswith("server ="):
-                server = l.split("=", 1)[-1].strip()
-    return station, server
-
-def get_refserver_name_for_path(ini_path_val):
-    """Читает имя сервера из [REFSERVER] Server = ... в rk7srv.INI для указанного пути."""
-    rk7srv_path = os.path.join(ini_path_val, "rk7srv.INI")
-    if not os.path.isfile(rk7srv_path):
-        return ""
-    try:
-        try:
-            with open(rk7srv_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-        except UnicodeDecodeError:
-            with open(rk7srv_path, 'r', encoding='cp1251') as f:
-                lines = f.readlines()
-        in_refserver = False
-        for line in lines:
-            stripped = line.strip()
-            if re.match(r'^\[REFSERVER\]', stripped, re.IGNORECASE):
-                in_refserver = True
-                continue
-            if in_refserver:
-                if stripped.startswith('['):
-                    break
-                m = re.match(r'^\s*Server\s*=\s*(\S+)', stripped, re.IGNORECASE)
-                if m:
-                    return m.group(1).strip()
-    except Exception:
-        pass
-    return ""
-
-def get_ini_settings(ini_path):
-    """Сбор параметров UseDBSync, UseSQL, Station, Server, Port, UDBFILE, WorkModules, REFSERVER из INI-файлов."""
-    station, server = get_station_server_for_path(ini_path)
-    refserver = get_refserver_name_for_path(ini_path)
-    settings = {
-        "UseDBSync": get_usedbsync_values_for_path(ini_path),
-        "UseSQL": get_usesql_value_for_path(ini_path),
-        "Station": station,
-        "Server": server,
-        "Port": get_port_value_for_path(ini_path),
-        "REFSERVER": refserver,
-    }
-    # Добавляем UDBFILE и WorkModules из rk7srv.INI
-    rk7srv = get_rk7srv_udb_workmodules(ini_path)
-    if rk7srv:
-        settings["UDBFILE"] = rk7srv.get("UDBFILE")
-        settings["WorkModules"] = rk7srv.get("WorkModules")
-    return settings
-
-def get_rk7srv_udb_workmodules(ini_path_val):
-    """Читает UDBFILE и WorkModules из rk7srv.INI."""
-    rk7srv_path = os.path.join(ini_path_val, "rk7srv.INI")
-    if not os.path.isfile(rk7srv_path):
-        return None
-    try:
-        with open(rk7srv_path, 'r', encoding='cp1251') as f:
-            content = f.read()
-        result = {}
-        for line in content.splitlines():
-            m = re.match(r'^\s*(UDBFILE|WorkModules)\s*=\s*(.*)$', line, re.IGNORECASE)
-            if m:
-                result[m.group(1)] = m.group(2).strip()
-        return result if result else None
-    except Exception as e:
-        print(f"Ошибка чтения rk7srv.INI: {e}")
-        return None
-
 def _apply_rk7srv_udf_workmodules(rk7srv_ini_path, ini_settings):
     """Восстанавливает UDBFILE и WorkModules в rk7srv.INI из сохранённых дефолтных значений."""
     udbfile = ini_settings.get("UDBFILE")
@@ -3360,98 +2789,7 @@ def save_task_id():
         f"Пустая папка MIDBASE создана: {midbase_path}"
     )
 
-def create_task_shortcuts(task_folder, bin_win_path):
-    """Создаёт ярлыки и ярлык папки win в папке задачи."""
-    try:
-        # 1. Ярлык папки win
-        win_folder = bin_win_path  # это и есть путь к папке win
-        if os.path.isdir(win_folder):
-            create_folder_lnk(os.path.join(task_folder, "..win.lnk"), win_folder)
-
-        # 2. refsrv.exe с ключом /desktop
-        refsrv_src = os.path.join(bin_win_path, "refsrv.exe")
-        if os.path.isfile(refsrv_src):
-            create_lnk(os.path.join(task_folder, "refsrv.lnk"), refsrv_src, "/desktop")
-
-        # 3. MIDSERV.exe с ключом /desktop
-        midsrv_src = os.path.join(bin_win_path, "MIDSERV.exe")
-        if os.path.isfile(midsrv_src):
-            create_lnk(os.path.join(task_folder, "MIDSERV.lnk"), midsrv_src, "/desktop")
-
-        # 4. rk7man.bat без ключа
-        rk7man_src = os.path.join(bin_win_path, "rk7man.bat")
-        if os.path.isfile(rk7man_src):
-            create_lnk(os.path.join(task_folder, "rk7man.lnk"), rk7man_src, "")
-
-        # 5. wincash.bat без ключа
-        wincash_src = os.path.join(bin_win_path, "wincash.bat")
-        if os.path.isfile(wincash_src):
-            create_lnk(os.path.join(task_folder, "wincash.lnk"), wincash_src, "")
-
-        print(f"[OK] Ярлыки созданы в {task_folder}")
-    except Exception as e:
-        print(f"[WARN] Не удалось создать ярлыки: {e}")
-
-def create_folder_lnk(lnk_path, target_folder):
-    """Создаёт ярлык папки (.lnk) через PowerShell."""
-    if os.path.exists(lnk_path):
-        return
-    try:
-        # Рабочая папка — родитель target_folder (bin), обратные слеши
-        bin_folder = os.path.dirname(target_folder).replace("/", "\\")
-        # Для папок нужен завершающий слеш
-        target_folder_escaped = target_folder.replace("/", "\\")
-        if not target_folder_escaped.endswith("\\"):
-            target_folder_escaped += "\\"
-        ps_script = f'''
-$WshShell = New-Object -ComObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut("{lnk_path}")
-$Shortcut.TargetPath = "{target_folder_escaped}"
-$Shortcut.WorkingDirectory = "{bin_folder}"
-$Shortcut.Description = "..win"
-$Shortcut.Save()
-'''
-        result = subprocess.run(
-            ["powershell", "-WindowStyle", "Hidden", "-Command", ps_script],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        if result.returncode != 0:
-            print(f"[WARN] PowerShell error: {result.stderr}")
-    except Exception as e:
-        print(f"[WARN] create_folder_lnk failed: {e}")
-
-def create_lnk(lnk_path, target, arguments):
-    """Создаёт .lnk файл через PowerShell."""
-    if os.path.exists(lnk_path):
-        return
-    try:
-        ps_script = f'''
-$WshShell = New-Object -ComObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut("{lnk_path}")
-$Shortcut.TargetPath = "{target}"
-$Shortcut.Arguments = "{arguments}"
-$Shortcut.WorkingDirectory = "{os.path.dirname(target)}"
-$Shortcut.Save()
-'''
-        result = subprocess.run(
-            ["powershell", "-WindowStyle", "Hidden", "-Command", ps_script],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        if result.returncode != 0:
-            print(f"[WARN] PowerShell error: {result.stderr}")
-    except Exception as e:
-        print(f"[WARN] create_lnk failed: {e}")
-
-# Загрузка номеров задач
-def load_task_ids():
-    data = load_data()
-    return [""] + list(data.get("tasks", {}).keys())
+# load_task_ids импортирована из modules.data_manager
 
 def delete_task():
     selected_task_id = task_id_var.get().strip()
@@ -3599,7 +2937,7 @@ tk.Button(
 path_frame = tk.Frame(path_task_frame)
 path_frame.pack(fill="x", padx=5, pady=(5, 5))
 path_var = tk.StringVar()
-ini_paths, auto_update_enabled, task_from_version_enabled, keep_cloud_files_enabled = load_settings_and_paths()
+ini_paths, auto_update_enabled, task_from_version_enabled, keep_cloud_files_enabled, _ = load_settings_and_paths()
 if ini_paths:
     path_var.set(ini_paths[0])
 path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
@@ -3783,16 +3121,6 @@ def apply_path(event=None, update_task=True): # Добавлен парамет�
     #task_id_combobox.current(0)  # Всегда показывать пустую строку первой при открытии
 
 path_entry.bind("<<ComboboxSelected>>", apply_path) # Обновление после выбора пути из списка
-
-
-def is_process_running(process_name):
-    for proc in psutil.process_iter(['name']):
-        try:
-            if proc.info['name'].lower() == process_name.lower():
-                return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    return False
 
 def check_program_process():
     if is_process_running("refsrv.exe"):
@@ -4254,7 +3582,7 @@ def start_refsrv_only():
     ini_path_norm = os.path.normpath(ini_path).lower()
 
     # Закрываем только refsrv из текущей директории
-    for proc, exe_dir in _get_process_by_name('refsrv.exe'):
+    for proc, exe_dir in get_process_by_name('refsrv.exe'):
         if exe_dir == ini_path_norm:
             try:
                 proc.terminate()
@@ -4274,7 +3602,7 @@ def start_rk7man_only():
     ini_path_norm = os.path.normpath(ini_path).lower()
 
     # Закрываем только rk7man из текущей директории
-    for proc, exe_dir in _get_process_by_name('rk7man.exe'):
+    for proc, exe_dir in get_process_by_name('rk7man.exe'):
         if exe_dir == ini_path_norm:
             try:
                 proc.terminate()
@@ -4292,71 +3620,24 @@ def start_rk7man_only():
     except Exception as e:
         centered_error("Ошибка запуска", str(e))
 
-# ======================= Запуск rk7man.bat =======================
-def run_rk7man():
-    for proc in psutil.process_iter(['pid', 'name']):
-        if proc.info['name'] and proc.info['name'].lower() == "rk7man.exe":
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-
-    time.sleep(1.5)
-
-    bat_path = os.path.join(ini_path, "rk7man.bat")
-    if not os.path.isfile(bat_path):
-        centered_error("Ошибка", f"Файл не найден:\n{bat_path}")
-        return
-    try:
-        os.startfile(bat_path)
-    except Exception as e:
-        centered_error("Ошибка запуска", str(e))
-
 # ======================= Запуск wincash.bat =======================
-def run_wincash_bat():
-    def run_bat():
-        bat_path = os.path.join(ini_path, "wincash.bat")
-        
-        # Проверка наличия файла
-        if not os.path.isfile(bat_path):
-            centered_error("Ошибка", f"Файл не найден:\n{bat_path}")
-            return
-        
-        try:
-            # Запуск .bat файла с выводом ошибок
-            print(f"[DEBUG] Попытка запуска: {bat_path}")
-            result = subprocess.run([bat_path], capture_output=True, text=True, shell=True, cwd=ini_path)
-
-            # Проверка результата
-            if result.returncode != 0:
-                # Если код завершения не 0, выводим ошибку
-                print(f"[ERROR] Ошибка при выполнении bat файла: {result.stderr}")
-                centered_error("Ошибка запуска", f"Ошибка при запуске {bat_path}:\n{result.stderr}")
-            else:
-                # Если всё прошло успешно, выводим результат
-                print(f"[INFO] bat файл выполнен успешно:\n{result.stdout}")
-        except Exception as e:
-            # Обработка исключений
-            centered_error("Ошибка запуска", f"Не удалось запустить {bat_path}:\n{str(e)}")
-
-    # Запуск функции в отдельном потоке
-    threading.Thread(target=run_bat, daemon=True).start()
+# (функция run_wincash_bat удалена - использовалась start_wincash_only)
 
 # DOSCASH.EXE нужно закрыть перед запуском если есть
 
 def run_refsrv_and_rk7man():
     ini_path_norm = os.path.normpath(ini_path).lower()
-    current_port = get_port_value()
+    current_port = get_port_value(ini_path)
 
     # Проверяем, занят ли текущий порт другим refsrv (не из текущей директории)
     if current_port:
-        used_ports = _get_used_ports()
+        used_ports = get_used_ports()
         if int(current_port) in used_ports:
             # Проверяем, есть ли refsrv на этом порту из другой директории
             conflict = False
-            for proc, exe_dir in _get_process_by_name('refsrv.exe'):
+            for proc, exe_dir in get_process_by_name('refsrv.exe'):
                 if exe_dir != ini_path_norm:
-                    ports = _get_process_listening_ports(proc.pid)
+                    ports = get_process_listening_ports(proc.pid)
                     if int(current_port) in ports:
                         conflict = True
                         break
@@ -4368,7 +3649,7 @@ def run_refsrv_and_rk7man():
                     new_port += 1
 
                 if new_port < int(current_port) + 100:
-                    server_name = get_refserver_name()
+                    server_name = get_refserver_name(ini_path)
                     if set_port_rk7srv(ini_path, str(new_port)):
                         set_port_rk7man(ini_path, server_name, str(new_port))
                         print(f"[PORT] Смена порта: {current_port} -> {new_port}")
@@ -4389,7 +3670,7 @@ def start_midserv_only():
     ini_path_norm = os.path.normpath(ini_path).lower()
 
     # Закрываем только midserv из текущей директории
-    for proc, exe_dir in _get_process_by_name('midserv.exe'):
+    for proc, exe_dir in get_process_by_name('midserv.exe'):
         if exe_dir == ini_path_norm:
             try:
                 proc.terminate()
@@ -4408,7 +3689,7 @@ def start_wincash_only():
     ini_path_norm = os.path.normpath(ini_path).lower()
 
     # Закрываем только doscash из текущей директории
-    for proc, exe_dir in _get_process_by_name('doscash.exe'):
+    for proc, exe_dir in get_process_by_name('doscash.exe'):
         if exe_dir == ini_path_norm:
             try:
                 proc.terminate()
@@ -4434,110 +3715,17 @@ def run_midserv_and_wincash():
 
 # ======================= Закрыть процес =======================
 def kill_midserv_process():
-    # Проходим по всем процессам
-    for proc in psutil.process_iter(['pid', 'name']):
-        try:
-            if proc.info['name'].lower() == "midserv.exe":
-                proc.terminate()  # Завершаем процесс
-                return
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-
-def _get_used_ports() -> set[int]:
-    """Возвращает множество портов, которые уже используются (LISTEN)."""
-    used = set()
-    try:
-        for conn in psutil.net_connections(kind='inet'):
-            if conn.laddr and conn.status == 'LISTEN':
-                used.add(conn.laddr.port)
-    except (psutil.AccessDenied, OSError):
-        pass
-    return used
-
+    """Завершает midserv.exe (обёртка для модульной функции)."""
+    kill_midserv()
 
 def _find_free_port(start_port: int = 6000, max_attempts: int = 100) -> int | None:
     """Находит первый свободный порт начиная с start_port."""
-    used = _get_used_ports()
+    used = get_used_ports()
     for port in range(start_port, start_port + max_attempts):
         if port not in used:
             return port
     return None
 
-
-def _get_process_listening_ports(pid: int) -> list[int]:
-    """Возвращает список портов, которые слушает процесс с данным PID."""
-    ports = []
-    try:
-        for conn in psutil.net_connections(kind='inet'):
-            if conn.pid == pid and conn.laddr and conn.status == 'LISTEN':
-                ports.append(conn.laddr.port)
-    except (psutil.AccessDenied, OSError):
-        pass
-    return ports
-
-
-def _read_port_from_ini(ini_dir: str) -> str | None:
-    """Читает PORT из [TCPSOC] rk7srv.INI в указанной директории."""
-    ini_file = os.path.join(ini_dir, "rk7srv.INI")
-    if not os.path.isfile(ini_file):
-        return None
-    try:
-        try:
-            with open(ini_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-        except UnicodeDecodeError:
-            with open(ini_file, 'r', encoding='cp1251') as f:
-                lines = f.readlines()
-        in_tcpsoc = False
-        for line in lines:
-            stripped = line.strip()
-            if re.match(r'^\[TCPSOC\]', stripped, re.IGNORECASE):
-                in_tcpsoc = True
-                continue
-            if in_tcpsoc:
-                if stripped.startswith('['):
-                    break
-                m = re.match(r'^\s*PORT\s*=\s*(\d+)', stripped, re.IGNORECASE)
-                if m:
-                    return m.group(1)
-    except Exception:
-        pass
-    return None
-
-
-def _get_process_by_name(name: str) -> list[tuple[psutil.Process, str]]:
-    """Возвращает список (process, exe_dir) для всех процессов с данным именем."""
-    results = []
-    try:
-        result = subprocess.run(
-            ['tasklist', '/FI', f'IMAGENAME eq {name}', '/FO', 'CSV'],
-            capture_output=True, text=True, timeout=2
-        )
-        if result.returncode == 0 and name.lower() in result.stdout.lower():
-            for line in result.stdout.strip().split('\n'):
-                if name.lower() not in line.lower():
-                    continue
-                try:
-                    parts = line.split(',')
-                    pid_str = parts[1].strip('"')
-                    pid = int(pid_str)
-                    proc = psutil.Process(pid)
-                    exe_dir = os.path.normpath(os.path.dirname(proc.exe())).lower()
-                    results.append((proc, exe_dir))
-                except (ValueError, IndexError, psutil.NoSuchProcess):
-                    pass
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-    for proc in psutil.process_iter(['pid', 'name']):
-        if proc.info.get('name', '').lower() != name.lower():
-            continue
-        try:
-            exe_dir = os.path.normpath(os.path.dirname(proc.exe())).lower()
-            if not any(p.pid == proc.pid for p, _ in results):
-                results.append((proc, exe_dir))
-        except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
-            continue
-    return results
 
 
 def _get_task_label_for_dir(exe_dir: str) -> str | None:
@@ -4559,59 +3747,13 @@ def _get_task_label_for_dir(exe_dir: str) -> str | None:
     return ", ".join(parts)
 
 
-def _get_port_info(ports: list[int]) -> str:
-    """Возвращает строку с информацией о том, какие процессы слушают на данных портах."""
-    if not ports:
-        return ""
-    info_parts = []
-    for port in ports:
-        proc_names = set()
-        try:
-            for conn in psutil.net_connections(kind='inet'):
-                if conn.laddr.port == port and conn.status == 'LISTEN' and conn.pid:
-                    try:
-                        p = psutil.Process(conn.pid)
-                        proc_names.add(f"{p.name()} (PID {conn.pid})")
-                    except psutil.NoSuchProcess:
-                        pass
-        except (psutil.AccessDenied, OSError):
-            pass
-        if proc_names:
-            info_parts.append(f"  {port}: {', '.join(proc_names)}")
-        else:
-            info_parts.append(f"  {port}: (неизвестно)")
-    return "\n".join(info_parts)
-
-
-def _get_rk7man_port_info(pid: int) -> str:
-    """Возвращает информацию о портах, к которым подключён процесс."""
-    connected = []
-    try:
-        for conn in psutil.net_connections(kind='inet'):
-            if conn.pid == pid and conn.status == 'ESTABLISHED' and conn.raddr:
-                port = conn.raddr.port
-                proc_info = ""
-                try:
-                    for c in psutil.net_connections(kind='inet'):
-                        if c.laddr.port == port and c.status == 'LISTEN' and c.pid:
-                            p = psutil.Process(c.pid)
-                            proc_info = f" ({p.name()} PID {c.pid})"
-                            break
-                except (psutil.AccessDenied, OSError, psutil.NoSuchProcess):
-                    pass
-                connected.append(f"  {port}: подключён{proc_info}")
-    except (psutil.AccessDenied, OSError):
-        pass
-    return "\n".join(connected) if connected else "  (нет активных подключений)"
-
-
 def kill_refsrv_and_rk7man():
     """Комбинированное закрытие refsrv + rk7man: если оба из текущей директории —
     сразу закрывает, иначе показывает окно с информацией о всех процессах."""
     ini_path_norm = os.path.normpath(ini_path).lower()
 
-    refsrv_procs = _get_process_by_name('refsrv.exe')
-    rk7man_procs = _get_process_by_name('rk7man.exe')
+    refsrv_procs = get_process_by_name('refsrv.exe')
+    rk7man_procs = get_process_by_name('rk7man.exe')
 
     refsrv_same = [p for p, d in refsrv_procs if d == ini_path_norm]
     refsrv_other = [(p, d) for p, d in refsrv_procs if d != ini_path_norm]
@@ -4637,12 +3779,12 @@ def kill_refsrv_and_rk7man():
         proc, exe_dir = refsrv_other[0]
         task_label = _get_task_label_for_dir(exe_dir)
         task_suffix = f"\n  {task_label}" if task_label else ""
-        ports = _get_process_listening_ports(proc.pid)
+        ports = get_process_listening_ports(proc.pid)
         if ports:
-            port_info = _get_port_info(ports)
+            port_info = get_port_info(ports)
             msg_lines.append(f"⚠ refsrv.exe ({exe_dir}):\n{port_info}{task_suffix}")
         else:
-            ini_port = _read_port_from_ini(exe_dir)
+            ini_port = get_port_value_for_path(exe_dir)
             msg_lines.append(f"⚠ refsrv.exe ({exe_dir})\n  Порт из INI: {ini_port or 'не найден'}{task_suffix}")
     else:
         msg_lines.append("✗ refsrv.exe (не запущен)")
@@ -4653,7 +3795,7 @@ def kill_refsrv_and_rk7man():
         msg_lines.append("✓ rk7man.exe (текущая директория)")
     elif rk7man_other:
         proc, exe_dir = rk7man_other[0]
-        port_info = _get_rk7man_port_info(proc.pid)
+        port_info = get_rk7man_port_info(proc.pid)
         msg_lines.append(f"⚠ rk7man.exe ({exe_dir}):\n{port_info}")
     else:
         msg_lines.append("✗ rk7man.exe (не запущен)")
@@ -4682,7 +3824,7 @@ def kill_refsrv_process():
     """Закрывает refsrv.exe: если запущен — спрашивает и закрывает,
     если не запущен из текущего ini_path — показывает порт и предлагает закрыть."""
     ini_path_norm = os.path.normpath(ini_path).lower()
-    procs = _get_process_by_name('refsrv.exe')
+    procs = get_process_by_name('refsrv.exe')
 
     same_dir = [(p, d) for p, d in procs if d == ini_path_norm]
     other_dir = [(p, d) for p, d in procs if d != ini_path_norm]
@@ -4695,12 +3837,12 @@ def kill_refsrv_process():
         proc, exe_dir = other_dir[0]
         task_label = _get_task_label_for_dir(exe_dir)
         task_suffix = f"\n{task_label}" if task_label else ""
-        ports = _get_process_listening_ports(proc.pid)
+        ports = get_process_listening_ports(proc.pid)
         if ports:
-            port_info = _get_port_info(ports)
+            port_info = get_port_info(ports)
             msg = f"refsrv.exe запущен:\n{port_info}\n({exe_dir}){task_suffix}\n\nЗакрыть его?"
         else:
-            ini_port = _read_port_from_ini(exe_dir)
+            ini_port = get_port_value_for_path(exe_dir)
             msg = f"refsrv.exe запущен ({exe_dir})\nПорт из INI: {ini_port or 'не найден'}{task_suffix}\nЗакрыть его?"
         answer = centered_askyesno("Закрыть refsrv.exe", msg)
         if answer:
@@ -4720,7 +3862,7 @@ def kill_rk7man_process():
     """Закрывает rk7man.exe: если запущен — спрашивает и закрывает,
     если не запущен из текущего ini_path — показывает, к какому порту подключён."""
     ini_path_norm = os.path.normpath(ini_path).lower()
-    procs = _get_process_by_name('rk7man.exe')
+    procs = get_process_by_name('rk7man.exe')
 
     same_dir = [(p, d) for p, d in procs if d == ini_path_norm]
     other_dir = [(p, d) for p, d in procs if d != ini_path_norm]
@@ -4731,7 +3873,7 @@ def kill_rk7man_process():
 
     if other_dir:
         proc, exe_dir = other_dir[0]
-        port_info = _get_rk7man_port_info(proc.pid)
+        port_info = get_rk7man_port_info(proc.pid)
         msg = f"rk7man.exe запущен:\n{port_info}\n({exe_dir})\n\nЗакрыть его?"
         answer = centered_askyesno("Закрыть rk7man.exe", msg)
         if answer:
@@ -4775,15 +3917,8 @@ def kill_rk7man_process():
             continue
 
 def kill_doscash_process():
-    # Проходим по всем процессам
-    for proc in psutil.process_iter(['pid', 'name']):
-        try:
-            # Если имя процесса совпадает с 'DOSCASH.EXE', завершаем его
-            if proc.info['name'].lower() == "doscash.exe":
-                proc.terminate()  # Завершаем процесс
-                return
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
+    """Завершает doscash.exe (обёртка для модульной функции)."""
+    kill_doscash()
 
 
 # ======================= Запуск / запуск+группы =======================
@@ -4908,9 +4043,9 @@ tk.Button(frame_win_cash, text="❌", command=kill_doscash_process, width=2)\
 
 
 # Переключатели
-usesql_var = tk.IntVar(value=int(get_usesql_value()))
-usedbsync_var = tk.IntVar(value=int(detect_consensus_value()))
-port_var = tk.StringVar(value=get_port_value())
+usesql_var = tk.IntVar(value=int(get_usesql_value(ini_path)))
+usedbsync_var = tk.IntVar(value=int(detect_consensus_value(ini_path)))
+port_var = tk.StringVar(value=get_port_value(ini_path))
 
 flags_lf = tk.LabelFrame(settings_tab, text="Параметры INI")
 flags_lf.pack(padx=10, pady=(0, 5), fill="x")
@@ -5439,7 +4574,7 @@ def copy_missing_ini_files():
         centered_warning("Нет файлов", "Отсутствующие файлы не найдены даже в bin\\win\\ini.")
 
 def on_check_with_message():
-    found, missing = check_files()
+    found, missing = check_files(ini_path)
 
     if missing:  # не исключаем rk7man.ini
         if centered_askyesno("Внимание", f"Файлы не найдены: {', '.join(missing)}\nДобавить из папки ini?"):
@@ -5575,6 +4710,7 @@ def save_prefs_flags(*_):
     data["settings"]["auto_update"] = auto_update_var.get()
     data["settings"]["task_from_version"] = task_from_version_var.get()
     data["settings"]["keep_cloud_files"] = keep_cloud_files_var.get()
+    data["settings"]["delete_zip_after_extract"] = delete_zip_after_extract_var.get()
     save_data(data)
 
 tk.Checkbutton(
@@ -5622,6 +4758,24 @@ cloud_files_desc_label = tk.Label(
 )
 cloud_files_desc_label.pack(padx=(30, 10), pady=(0, 10), anchor="w", fill="x")
 
+tk.Checkbutton(
+    prefs_tab,
+    text="Удалять ZIP архив после распаковки версии",
+    variable=delete_zip_after_extract_var,
+    command=save_prefs_flags
+).pack(padx=10, pady=(5, 2), anchor="w")
+
+delete_zip_desc_label = tk.Label(
+    prefs_tab,
+    text="После скачивания и успешной распаковки версии RK, ZIP архив будет удалён.",
+    justify="left",
+    fg="gray40",
+    font=("TkDefaultFont", 8),
+    wraplength=350,
+    anchor="w"
+)
+delete_zip_desc_label.pack(padx=(30, 10), pady=(0, 10), anchor="w", fill="x")
+
 # Info tab
 info_tab = tk.Frame(notebook)
 notebook.add(info_tab, text="О программе")
@@ -5658,4 +4812,4 @@ root.deiconify()
 root.mainloop()
 
 
-# pyinstaller --onefile --windowed --icon=".\.ico\иконка EngiHelp.ico" --hidden-import=tkinter --clean EngiHelp.py
+# pyinstaller --onefile --windowed --icon=".\.ico\иконка EngiHelp.ico" --add-data "modules;modules" --hidden-import=tkinter --clean EngiHelp.py
