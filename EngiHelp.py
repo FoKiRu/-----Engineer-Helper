@@ -17,6 +17,8 @@ import tempfile
 import webbrowser
 import keyboard
 import queue
+import ctypes
+import ctypes.wintypes
 from packaging import version
 
 # ======================= Модули =======================
@@ -46,7 +48,7 @@ from modules.task_manager import create_task_for_version, get_task_label_for_dir
 from modules.version_updater import check_rk_updates, download_version, extract_zip
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.9.32"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v1.9.9.33"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -95,13 +97,50 @@ WINDOW_HEIGHT = 510
 WINDOW_OFFSET_X = 223
 WINDOW_OFFSET_Y = 100   
 
-# Центрирование окна
-screen_width = root.winfo_screenwidth()
-screen_height = root.winfo_screenheight()
-cursor_x = root.winfo_pointerx()
-cursor_y = root.winfo_pointery()
-x = max(0, min(screen_width - WINDOW_WIDTH, cursor_x - WINDOW_OFFSET_X))
-y = max(0, min(screen_height - WINDOW_HEIGHT, cursor_y - WINDOW_OFFSET_Y))
+def _is_point_on_monitor(px, py):
+    """True, если точка попадает на один из подключённых мониторов."""
+    try:
+        point = ctypes.wintypes.POINT(px, py)
+        return bool(ctypes.windll.user32.MonitorFromPoint(point, 0))  # 0 = MONITOR_DEFAULTTONULL
+    except Exception:
+        return False
+
+def _load_window_position():
+    """Возвращает сохранённую позицию главного окна (x, y) или None,
+    если её нет или заголовок окна оказался бы за пределами мониторов."""
+    pos = load_data()["settings"].get("window_pos")
+    if not (isinstance(pos, list) and len(pos) == 2 and all(isinstance(v, int) for v in pos)):
+        return None
+    px, py = pos
+    if _is_point_on_monitor(px + 20, py + 10) or _is_point_on_monitor(px + WINDOW_WIDTH - 20, py + 10):
+        return px, py
+    return None
+
+def save_window_position():
+    """Сохраняет позицию главного окна, чтобы при запуске открыть его там же."""
+    try:
+        if root.state() != "normal":
+            return
+        m = re.match(r'^\d+x\d+\+(-?\d+)\+(-?\d+)$', root.geometry())
+        if not m:
+            return
+        data = load_data()
+        data["settings"]["window_pos"] = [int(m.group(1)), int(m.group(2))]
+        save_data(data)
+    except Exception as e:
+        print(f"[WARN] Не удалось сохранить позицию окна: {e}")
+
+# Позиция окна: там, где закрыли в прошлый раз, иначе — у курсора
+saved_pos = _load_window_position()
+if saved_pos:
+    x, y = saved_pos
+else:
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    cursor_x = root.winfo_pointerx()
+    cursor_y = root.winfo_pointery()
+    x = max(0, min(screen_width - WINDOW_WIDTH, cursor_x - WINDOW_OFFSET_X))
+    y = max(0, min(screen_height - WINDOW_HEIGHT, cursor_y - WINDOW_OFFSET_Y))
 
 root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
 
@@ -1711,7 +1750,8 @@ def setup_global_hotkeys():
     keyboard.add_hotkey('ctrl+x', cut_text_global)
 
 def on_closing():
-    """Очищает горячие клавиши перед закрытием"""
+    """Сохраняет позицию окна и очищает горячие клавиши перед закрытием"""
+    save_window_position()
     try:
         keyboard.remove_all_hotkeys()
     except:
@@ -3761,6 +3801,7 @@ def check_for_updates(silent=False):
         )
         """)
         subprocess.Popen(['cmd', '/c', bat_path], shell=False)
+        save_window_position()
         root.destroy()
     except Exception as e:
         if not silent:
