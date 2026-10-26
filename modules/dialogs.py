@@ -7,6 +7,8 @@ import tkinter as tk
 # Максимальная ширина всплывающих окон: если текст в Label не влезает,
 # он переносится на новую строку (wraplength), а не растягивает окно.
 CENTERED_WINDOW_MAX_WIDTH = 500
+# Окно-таблица с флажками шире: в нём пути процессов
+CHECKLIST_WINDOW_MAX_WIDTH = 580
 
 _root = None
 _icon_path = None
@@ -89,22 +91,24 @@ def _add_details(win, frame, details, details_label):
     toggle_btn.pack(anchor="w")
     toggle_btn.bind("<Button-1>", lambda e: toggle())
 
-def _ask(title, message, yes_text, no_text, details=None, details_label="Подробнее"):
-    """Окно с вопросом и двумя кнопками. Ждёт ответа, возвращает True/False (None — окно закрыто крестиком).
+def _ask_choice(title, message, options, details=None, details_label="Подробнее"):
+    """Окно с вопросом и кнопкой на каждый вариант из options. Ждёт ответа,
+    возвращает индекс нажатой кнопки (None — окно закрыто крестиком).
     details — необязательный текст, который показывается свёрнутым под сообщением."""
     result = [None]
     win, frame = _create_dialog(title, message)
     if details:
         _add_details(win, frame, details, details_label)
 
-    def answer(value):
-        result[0] = value
+    def answer(index):
+        result[0] = index
         win.destroy()
 
     btn_frame = tk.Frame(frame)
     btn_frame.pack(pady=(0, 15))
-    tk.Button(btn_frame, text=yes_text, command=lambda: answer(True), width=10).pack(side="left", padx=5)
-    tk.Button(btn_frame, text=no_text, command=lambda: answer(False), width=10).pack(side="left", padx=5)
+    for i, text in enumerate(options):
+        tk.Button(btn_frame, text=text, command=lambda i=i: answer(i),
+                  width=max(10, len(text) + 2)).pack(side="left", padx=5)
 
     _center_window(win)
 
@@ -112,6 +116,11 @@ def _ask(title, message, yes_text, no_text, details=None, details_label="Под�
     win.deiconify()
     win.wait_window()
     return result[0]
+
+def _ask(title, message, yes_text, no_text, details=None, details_label="Подробнее"):
+    """Окно с вопросом и двумя кнопками. Возвращает True/False (None — окно закрыто крестиком)."""
+    choice = _ask_choice(title, message, [yes_text, no_text], details, details_label)
+    return None if choice is None else choice == 0
 
 # ======================= Публичные функции =======================
 
@@ -132,6 +141,11 @@ def centered_askyesno(title, message, details=None, details_label="Подроб�
     details — свёрнутый блок подробностей (раскрывается по клику на details_label)."""
     return _ask(title, message, "Да", "Нет", details, details_label)
 
+def centered_askchoice(title, message, options, details=None, details_label="Подробнее"):
+    """Центрированное окно с кнопкой на каждый вариант из options.
+    Возвращает индекс выбранного варианта или None, если окно закрыто крестиком."""
+    return _ask_choice(title, message, options, details, details_label)
+
 def centered_askchecklist(title, entries, question, details=None, details_label="Подробнее"):
     """Окно со списком флажков и кнопками Да/Нет.
     entries — список (text, checkable): checkable=True — флажок (по умолчанию отмечен),
@@ -141,17 +155,52 @@ def centered_askchecklist(title, entries, question, details=None, details_label=
     win, frame = _create_dialog(title, None)
     result = [None]
 
-    entries_frame = tk.Frame(frame)
-    entries_frame.pack(fill="x", padx=15, pady=(15, 5))
+    # Таблица: первый столбец — флажок, второй — описание (первая строка жирным).
+    # Линии сетки — фон контейнера, видимый в промежутках между ячейками.
+    table = tk.Frame(frame, background="gray70", padx=1, pady=1)
+    table.pack(fill="x", padx=15, pady=(15, 5))
+    table.grid_columnconfigure(1, weight=1)
+    cell_bg = frame.cget("background")
+    header_bg = "gray88"
+    bold_font = ("TkDefaultFont", 9, "bold")
+
+    for col, text in enumerate(("Закрыть", "Процесс")):
+        tk.Label(table, text=text, font=bold_font, background=header_bg, padx=8, pady=3,
+                 anchor="center" if col == 0 else "w").grid(row=0, column=col, sticky="nsew",
+                                                           padx=(0, 1 if col == 0 else 0), pady=(0, 1))
+
     check_vars = []
-    for text, checkable in entries:
+    for row, (text, checkable) in enumerate(entries, start=1):
+        pady = (0, 1) if row < len(entries) else 0
+        check_cell = tk.Frame(table, background=cell_bg, width=60)
+        check_cell.grid(row=row, column=0, sticky="nsew", padx=(0, 1), pady=pady)
+        info_cell = tk.Frame(table, background=cell_bg, padx=8, pady=4)
+        info_cell.grid(row=row, column=1, sticky="nsew", pady=pady)
+
+        first_line, _, rest = text.partition("\n")
+        labels = [tk.Label(info_cell, text=first_line, font=bold_font, justify="left", anchor="w",
+                           background=cell_bg, wraplength=420)]
+        if rest:
+            labels.append(tk.Label(info_cell, text=rest, justify="left", anchor="w",
+                                   background=cell_bg, wraplength=420))
+        for label in labels:
+            label.pack(anchor="w", fill="x")
+
         if checkable:
             var = tk.BooleanVar(value=True)
-            tk.Checkbutton(entries_frame, text=text, variable=var, justify="left", anchor="w",
-                           command=lambda: update_yes_state()).pack(anchor="w", pady=2)
+            tk.Checkbutton(check_cell, variable=var, background=cell_bg, activebackground=cell_bg,
+                           command=lambda: update_yes_state()).place(relx=0.5, rely=0.5, anchor="center")
+
+            def toggle(event, var=var):
+                var.set(not var.get())
+                update_yes_state()
+            for widget in [info_cell] + labels:
+                widget.bind("<Button-1>", toggle)
+                widget.config(cursor="hand2")
         else:
             var = None
-            tk.Label(entries_frame, text=text, justify="left", anchor="w").pack(anchor="w", padx=(4, 0), pady=2)
+            for label in labels:
+                label.config(foreground="gray40")
         check_vars.append(var)
 
     tk.Label(frame, text=question, justify="left").pack(anchor="w", padx=15, pady=(5, 10))
@@ -173,7 +222,7 @@ def centered_askchecklist(title, entries, question, details=None, details_label=
         any_checked = any(v and v.get() for v in check_vars)
         yes_btn.config(state="normal" if any_checked else "disabled")
 
-    _center_window(win)
+    _center_window(win, max_width=CHECKLIST_WINDOW_MAX_WIDTH)
 
     win.focus_force()
     win.deiconify()

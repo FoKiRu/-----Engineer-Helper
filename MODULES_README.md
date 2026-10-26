@@ -54,6 +54,11 @@
 - `create_folder_lnk(lnk_path, target)` - ярлык папки
 - `create_lnk(lnk_path, target, args)` - ярлык файла
 
+### modules/changelog.py
+История изменений для вкладки «Что нового»:
+- `CHANGELOG` - список версий (новые сверху): `version`, `date`, `items`
+- При каждом повышении `SCRIPT_VERSION` добавляется запись в начало списка
+
 ## Использование
 
 ```python

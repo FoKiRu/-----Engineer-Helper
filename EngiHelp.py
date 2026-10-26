@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modules import check_gitignore_status, extract_icon_to_temp, get_short_path_name
 from modules import dialogs
 from modules.dialogs import _center_window, centered_info, centered_warning, centered_error
-from modules.dialogs import centered_askyesno, centered_askchecklist
+from modules.dialogs import centered_askyesno, centered_askchecklist, centered_askchoice
 from modules.data_manager import load_data, save_data, load_settings_and_paths, get_task_data
 from modules.data_manager import save_settings_and_path as _save_recent_path
 from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
@@ -36,6 +36,7 @@ from modules.ini_utils import set_port_rk7srv, set_port_rk7man, apply_port
 from modules.ini_utils import FILES, detect_consensus_value, get_usesql_value, get_port_value, get_port_value_for_path
 from modules.ini_utils import get_refserver_name, update_ini_file, update_rkeeper_ini_basepath
 from modules.ini_utils import update_rk7srv_ini, get_ini_settings, check_files, apply_rk7srv_udf_workmodules
+from modules.ini_utils import get_rk7srv_udb_workmodules
 from modules.process_utils import kill_midserv, kill_doscash
 from modules.process_utils import kill_processes_for_version_change, get_used_ports, get_process_by_name, is_process_running
 from modules.process_utils import get_port_info, get_rk7man_port_info, get_process_listening_ports
@@ -44,11 +45,13 @@ from modules.cloud_rk7man import cloud_rk7man_dialog
 from modules.shortcuts import create_task_shortcuts
 from modules.task_manager import extract_task_id_from_rk7srv_ini, find_product_root
 from modules.task_manager import extract_rk_version_from_path, find_available_rk_versions
-from modules.task_manager import create_task_for_version, get_task_label_for_dir
+from modules.task_manager import create_task_for_version
+from modules.task_manager import find_running_task_by_ports, find_last_running_task, _main_refsrv_port
 from modules.version_updater import check_rk_updates, download_version, extract_zip
+from modules.changelog import CHANGELOG
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.9.33"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v1.9.9.35"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -527,15 +530,16 @@ def _check_refsrv_on_disable(selected_path: str) -> None:
         logging.error("Ошибка при проверке refsrv при снятии флага: %s", e)
 
 #======================Начало / Запуск рефа с параметром UpgradeAnyTime======================
-def set_upgrade_anytime(value: str) -> bool:
-    """Устанавливает UpgradeAnyTime=value в секцию [REFSERVER] файла rk7srv.INI.
+def set_upgrade_anytime(value: str, ini_path_val=None) -> bool:
+    """Устанавливает UpgradeAnyTime=value в секцию [REFSERVER] файла rk7srv.INI
+    (папка ini_path_val, по умолчанию — текущая версия).
     Алгоритм:
       1. Если строка UpgradeAnyTime уже есть в [REFSERVER] — обновляет её.
       2. Если секция [REFSERVER] есть, но параметра нет — вставляет строку
          последней в секции (перед следующей секцией или в конце файла).
       3. Если секции [REFSERVER] нет — добавляет секцию и параметр в конец файла.
     """
-    ini_file = os.path.join(ini_path, "rk7srv.INI")
+    ini_file = os.path.join(ini_path_val or ini_path, "rk7srv.INI")
     if not os.path.isfile(ini_file):
         centered_error("Ошибка", f"Файл rk7srv.INI не найден:\n{ini_file}")
         return False
@@ -598,35 +602,25 @@ def set_upgrade_anytime(value: str) -> bool:
 
 
 def upgrade_anytime_refsrv():
-    """Устанавливает UpgradeAnyTime=1, запускает refsrv.exe, затем сбрасывает в 0."""
-    refsrv_exe = os.path.join(ini_path, "refsrv.exe")
-    if not os.path.isfile(refsrv_exe):
-        centered_error("Ошибка", f"Файл refsrv.exe не найден:\n{refsrv_exe}")
+    """Перезапуск refsrv выбранной версии с UpgradeAnyTime=1:
+    находит refsrv текущей задачи, убивает его, дожидается закрытия и запускает
+    с UpgradeAnyTime=1 (после старта сбрасывается в 0). refsrv других задач не трогаются."""
+    start_refsrv_only(upgrade_anytime=True)
+
+def _reset_upgrade_anytime_after_start(ini_path_val, before_pids, attempts=30):
+    """Ждёт появления нового refsrv из ini_path_val и через 3 секунды после его старта
+    (refsrv должен успеть прочитать INI) сбрасывает UpgradeAnyTime в 0.
+    Если процесс так и не появился — сбрасывает по истечении попыток."""
+    exe_dir_norm = os.path.normpath(ini_path_val).lower()
+    started = any(d == exe_dir_norm and p.pid not in before_pids
+                  for p, d in get_process_by_name('refsrv.exe'))
+    if started or attempts <= 0:
+        def reset_flag():
+            set_upgrade_anytime("0", ini_path_val)
+            logging.info("UpgradeAnyTime сброшен в 0")
+        root.after(3000 if started else 0, reset_flag)
         return
-
-    # Шаг 1: UpgradeAnyTime=1
-    if not set_upgrade_anytime("1"):
-        return
-
-    # Шаг 2: Запуск refsrv.exe
-    try:
-        subprocess.Popen(
-            f'start "" "{refsrv_exe}" -desktop',
-            shell=True
-        )
-        logging.info("refsrv.exe запущен (UpgradeAnyTime)")
-    except Exception as e:
-        centered_error("Ошибка", f"Не удалось запустить refsrv.exe:\n{e}")
-        set_upgrade_anytime("0")  # Сбрасываем даже при ошибке запуска
-        return
-
-    # Шаг 3: Ждём немного (чтобы процесс успел стартовать) и сбрасываем в 0
-    def reset_flag():
-        time.sleep(3)
-        set_upgrade_anytime("0")
-        logging.info("UpgradeAnyTime сброшен в 0")
-
-    threading.Thread(target=reset_flag, daemon=True, name="upgrade-anytime-reset").start()
+    root.after(500, lambda: _reset_upgrade_anytime_after_start(ini_path_val, before_pids, attempts - 1))
 #======================Конец / Запуск рефа с параметром UpgradeAnyTime======================
 
 def toggle_usesql():
@@ -2700,30 +2694,193 @@ def run_or_restart_process(exe_name):
     except Exception as e:
         centered_error("Ошибка запуска", str(e))
 
-def start_refsrv_only():
-    """Запускает refsrv.exe из текущей директории, закрывая только свой экземпляр."""
+def start_refsrv_only(ask_if_running=True, upgrade_anytime=False):
+    """Запускает refsrv.exe из текущей директории.
+    Если этот же сервер (та же база) уже запущен — перезапускает его без вопросов.
+    Если в версии работает refsrv другой задачи и ask_if_running=True — спрашивает:
+    запустить ещё один рядом с работающим, перезапустить или отменить.
+    При ask_if_running=False работающие экземпляры этой версии перезапускаются.
+    upgrade_anytime=True — запуск с UpgradeAnyTime=1 (после старта сбрасывается в 0):
+    без вопросов закрывается только refsrv текущей задачи, остальные не трогаются.
+    Закрываемый refsrv сначала должен действительно завершиться — иначе запуск отменяется."""
     exe_path = os.path.join(ini_path, "refsrv.exe")
     if not os.path.isfile(exe_path):
         centered_error("Ошибка", f"Файл не найден:\n{exe_path}")
         return
 
     ini_path_norm = os.path.normpath(ini_path).lower()
+    all_procs = get_process_by_name('refsrv.exe')
+    same_dir = [(p, d) for p, d in all_procs if d == ini_path_norm]
 
-    # Закрываем только refsrv из текущей директории
-    for proc, exe_dir in get_process_by_name('refsrv.exe'):
-        if exe_dir == ini_path_norm:
-            try:
-                proc.terminate()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
+    if not ask_if_running:
+        to_close = same_dir
+    else:
+        to_close = [(p, d) for p, d in same_dir if _is_same_refsrv(p, d)]
 
-    time.sleep(0.5)
+    # Свой refsrv не закрывается, а порт занят другим — новый запустится на ближайшем свободном
+    current_port, new_port = get_port_value(ini_path), None
+    if not to_close and (same_dir or upgrade_anytime) and current_port.isdigit():
+        used_ports = get_used_ports()
+        if int(current_port) in used_ports:
+            new_port = _find_free_port_near(int(current_port), used_ports)
+            if new_port is None:
+                centered_error("Ошибка", f"Порт {current_port} занят, а свободный порт рядом не найден.")
+                return
+
+    if upgrade_anytime:
+        # Закрывается только refsrv текущей задачи (to_close), остальные не трогаем и не спрашиваем
+        if new_port is not None:
+            centered_warning("Порт", f"Порт {current_port} уже занят — refsrv будет запущен на порту {new_port}.")
+    elif same_dir and not to_close:
+        _, texts, port_details, port_label = _describe_refsrv_processes(same_dir)
+        count = "уже запущен refsrv" if len(same_dir) == 1 else f"уже запущено refsrv: {len(same_dir)}"
+        msg = f"В этой версии {count}:\n\n" + "\n\n".join(texts)
+        if new_port is not None:
+            msg += (f"\n\n⚠ Порт {current_port} из rk7srv.INI уже занят — "
+                    f"новый refsrv будет запущен на порту {new_port}.")
+        msg += "\n\nЗапустить ещё один?"
+        choice = centered_askchoice("Refsrv уже запущен", msg,
+                                    ["Запустить ещё", "Перезапустить", "Отмена"],
+                                    details=port_details, details_label=port_label)
+        if choice is None or choice == 2:
+            return
+        if choice == 1:
+            to_close, new_port = same_dir, None
+
+    if new_port is not None:
+        _set_port(str(new_port))
+        print(f"[PORT] Порт {current_port} занят, новый refsrv на порту {new_port}")
+
+    if to_close:
+        # Закрываем только refsrv из текущей директории и ждём, пока они действительно завершатся
+        alive = _kill_and_wait([p for p, _ in to_close])
+        if alive:
+            pids = ", ".join(str(p.pid) for p in alive)
+            centered_error("Ошибка", f"Не удалось закрыть refsrv.exe (PID {pids}).\nЗапуск отменён.")
+            return
+
+    # Имя REFSERVER не должно совпадать с именами уже запущенных refsrv
+    closed_pids = {p.pid for p, _ in to_close}
+    running = [(p, d) for p, d in all_procs if p.pid not in closed_pids]
+    server_name = get_refserver_name(ini_path)
+    taken_names = {get_running_refsrv_name(p, d) for p, d in running} - {""}
+    if server_name and server_name.lower() in {n.lower() for n in taken_names}:
+        new_name = _make_unique_refserver_name(server_name, taken_names, task_id_var.get().strip())
+        _rename_refserver(new_name)
+        print(f"[REFSERVER] Имя {server_name} уже занято, новый refsrv запускается как {new_name}")
+        centered_warning("REFSERVER",
+                         f"Сервер с именем {server_name} уже запущен.\n"
+                         f"Для нового refsrv имя изменено на {new_name}.")
+        server_name = new_name
+
+    launch_ini_path = ini_path
+    if upgrade_anytime and not set_upgrade_anytime("1", launch_ini_path):
+        return
 
     # Запускаем новый экземпляр
     try:
         subprocess.Popen(f'start "" "{exe_path}" -desktop', shell=True)
     except Exception as e:
         centered_error("Ошибка запуска", str(e))
+        if upgrade_anytime:
+            set_upgrade_anytime("0", launch_ini_path)  # Сбрасываем даже при ошибке запуска
+        return
+
+    before_pids = {p.pid for p, _ in all_procs}
+    if upgrade_anytime:
+        logging.info("refsrv.exe запущен (UpgradeAnyTime)")
+        root.after(500, lambda: _reset_upgrade_anytime_after_start(launch_ini_path, before_pids))
+
+    launch = {"name": server_name, "udb": _current_udb(launch_ini_path)}
+    root.after(500, lambda: _remember_refsrv_launch(ini_path_norm, before_pids, launch))
+
+def _kill_and_wait(procs, timeout=10):
+    """Убивает процессы и ждёт, пока они действительно завершатся.
+    Возвращает список процессов, которые закрыть не удалось."""
+    for proc in procs:
+        try:
+            proc.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    _, alive = psutil.wait_procs(procs, timeout=timeout)
+    return alive
+
+# ======================= Параметры запущенных refsrv =======================
+# refsrv читает имя сервера и базу из rk7srv.INI при старте, а INI потом могут
+# перенастроить на другую задачу. Поэтому при запуске из EngiHelp имя и база
+# запоминаются (settings.refsrv_launches, ключ "pid:время старта").
+# Для refsrv, запущенных не из EngiHelp, имя берётся из rk7srv.INI их папки,
+# а задача — по порту процесса и RefEvents.dat.
+
+def _refsrv_key(proc):
+    try:
+        return f"{proc.pid}:{int(proc.create_time())}"
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return None
+
+def _get_refsrv_launch(proc):
+    """Запомненные при запуске параметры refsrv: {"name", "udb"} или {}."""
+    return load_data()["settings"].get("refsrv_launches", {}).get(_refsrv_key(proc)) or {}
+
+def _current_udb(ini_path_val):
+    """Полный путь к базе (UDBFILE) из rk7srv.INI, в нижнем регистре."""
+    udb = (get_rk7srv_udb_workmodules(ini_path_val) or {}).get("UDBFILE")
+    return os.path.normpath(os.path.join(ini_path_val, udb)).lower() if udb else ""
+
+def get_running_refsrv_name(proc, exe_dir):
+    """Имя REFSERVER, с которым запущен refsrv."""
+    return _get_refsrv_launch(proc).get("name") or get_refserver_name(exe_dir)
+
+def _is_same_refsrv(proc, exe_dir):
+    """True — refsrv относится к выбранной задаче (задача не выбрана — работает с базой без задачи),
+    то есть это тот же сервер, и его достаточно перезапустить.
+    Сравнивается именно задача, а не UDBFILE из rk7srv.INI: INI могли перенастроить после запуска."""
+    found, running_task = _running_refsrv_task(proc, exe_dir, get_process_listening_ports(proc.pid))
+    current_task = task_id_var.get().strip() or None
+    return found and (running_task or None) == current_task
+
+def _remember_refsrv_launch(exe_dir_norm, before_pids, launch, attempts=20):
+    """Ждёт появления нового refsrv из exe_dir_norm и запоминает, с какими именем и базой он запущен.
+    Записи о завершённых процессах при этом удаляются."""
+    procs = get_process_by_name('refsrv.exe')
+    new_procs = [p for p, d in procs if d == exe_dir_norm and p.pid not in before_pids]
+    if not new_procs:
+        if attempts > 0:
+            root.after(500, lambda: _remember_refsrv_launch(exe_dir_norm, before_pids, launch, attempts - 1))
+        return
+    alive_keys = {_refsrv_key(p) for p, _ in procs}
+    data = load_data()
+    launches = {k: v for k, v in data["settings"].get("refsrv_launches", {}).items() if k in alive_keys}
+    for p in new_procs:
+        key = _refsrv_key(p)
+        if key:
+            launches[key] = launch
+    data["settings"]["refsrv_launches"] = launches
+    save_data(data)
+
+def _make_unique_refserver_name(name, taken_names, task_id):
+    """Добавляет к имени _{номер задачи}; если и так занято (или задачи нет) — _2, _3 ..."""
+    taken = {n.lower() for n in taken_names}
+    suffix = f"_{task_id}"
+    base = name if not task_id or name.lower().endswith(suffix.lower()) else name + suffix
+    candidate, n = base, 2
+    while candidate.lower() in taken:
+        candidate = f"{base}_{n}"
+        n += 1
+    return candidate
+
+def _rename_refserver(new_name):
+    """Меняет имя REFSERVER: rk7srv.INI, RKEEPER.INI, rk7man.ini ([REFEDIT] и [TCPDNS]),
+    поле «REFSERVER» и настройки задачи (или дефолты версии)."""
+    refserver_var.set(new_name)  # trace сам пишет имя в rk7srv.INI, RKEEPER.INI и rk7man.ini [REFEDIT]
+    port = get_port_value(ini_path)
+    if port:
+        apply_port(ini_path, port)  # запись {имя}=127.0.0.1:{порт} в [TCPDNS] rk7man.ini
+    task_id = task_id_var.get().strip()
+    if task_id:
+        apply_network_ids_silent_for_task(task_id)
+    else:
+        sync_default_settings_if_no_task()
 
 def start_rk7man_only():
     """Запускает rk7man.bat из текущей директории, закрывая только свой экземпляр."""
@@ -2784,7 +2941,7 @@ def run_refsrv_and_rk7man():
                 else:
                     centered_error("Ошибка", "Не удалось найти свободный порт")
 
-    start_refsrv_only()
+    start_refsrv_only(ask_if_running=False)
     time.sleep(1.5)
     start_rk7man_only()
 
@@ -2846,30 +3003,77 @@ def kill_midserv_process():
     """Завершает midserv.exe (обёртка для модульной функции)."""
     kill_midserv()
 
+def _running_refsrv_task(proc, exe_dir, ports):
+    """Задача, с базой которой работает refsrv: по запомненной при запуске базе,
+    иначе по портам и RefEvents.dat, иначе по rk7srv.INI его папки.
+    Возвращает (найдено, task_id); task_id = None — база без задачи."""
+    udb = _get_refsrv_launch(proc).get("udb")
+    if udb:
+        m = re.search(r'([^\\/]+)[\\/]base[\\/][^\\/]+$', udb)
+        if m and not m.group(1).lower().startswith("inst"):
+            return True, m.group(1)
+        m = re.search(r'[\\/]base_([^\\/]+)[\\/]', udb)  # старый формат base_{задача}
+        return True, m.group(1) if m else None
+    found, task_id = find_running_task_by_ports(exe_dir, ports)
+    if not found:
+        found, task_id = find_last_running_task(exe_dir)
+    if not found:
+        task_id = extract_task_id_from_rk7srv_ini(os.path.join(exe_dir, "rk7srv.INI"))
+        found = bool(task_id)
+    return found, task_id
+
 def _describe_refsrv_processes(procs):
-    """Описание refsrv-процессов для окна закрытия.
-    procs — список (proc, exe_dir). Для каждого — текст флажка: путь, задача и версия;
-    порты уходят в свёрнутый блок. Возвращает (список текстов, текст портов, заголовок блока)."""
-    texts, port_blocks, total_ports = [], [], 0
+    """Описание refsrv-процессов для окна закрытия. procs — список (proc, exe_dir).
+    Процессы упорядочиваются: сначала выбранная задача текущей версии, остальные — по времени
+    запуска, новые сверху. Текст каждого — три строки: задача, имя сервера, процесс с путём и PID;
+    порты уходят в свёрнутый блок.
+    Возвращает (процессы в новом порядке, список текстов, текст портов, заголовок блока)."""
+    selected_task = task_id_var.get().strip()
+    ini_path_norm = os.path.normpath(ini_path).lower()
+
+    rows = []
     for proc, exe_dir in procs:
         ports = get_process_listening_ports(proc.pid)
-        text = f"refsrv.exe ({exe_dir})"
-        if len(procs) > 1:
-            text += f", PID {proc.pid}"
-        task_label = get_task_label_for_dir(exe_dir, ports)
-        if task_label:
-            text += f"\n{task_label}"
+        found, task_id = _running_refsrv_task(proc, exe_dir, ports)
+        is_selected = bool(selected_task) and task_id == selected_task and exe_dir == ini_path_norm
+        try:
+            started = proc.create_time()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            started = 0
+        rows.append((proc, exe_dir, ports, found, task_id, is_selected, started))
+    rows.sort(key=lambda r: (not r[5], -r[6]))
+
+    ordered, texts, port_blocks, total_ports = [], [], [], 0
+    for proc, exe_dir, ports, found, task_id, is_selected, started in rows:
+        if task_id:
+            task_line = f"Задача {task_id}"
+        else:
+            task_line = "Без задачи" if found else "Задача не определена"
+        if is_selected:
+            task_line += " (выбрана)"
+        version = extract_rk_version_from_path(exe_dir)
+        port = _main_refsrv_port(exe_dir, task_id, ports) or get_port_value_for_path(exe_dir)
+        details = [part for part in (f"версия {version}" if version else "",
+                                     f"порт {port}" if port else "") if part]
+        if details:
+            task_line += " · " + ", ".join(details)
+
+        server_name = get_running_refsrv_name(proc, exe_dir)
+        started_text = time.strftime("%d.%m %H:%M", time.localtime(started)) if started else ""
+        lines = [
+            task_line,
+            f"Сервер: {server_name or 'не определён'}" + (f" · запущен {started_text}" if started_text else ""),
+            f"refsrv.exe · {exe_dir} · PID {proc.pid}",
+        ]
+        ordered.append((proc, exe_dir))
+        texts.append("\n".join(lines))
         if ports:
             total_ports += len(ports)
             port_lines = "\n".join(line.strip() for line in get_port_info(ports).splitlines())
-            port_blocks.append(f"PID {proc.pid}:\n{port_lines}" if len(procs) > 1 else port_lines)
-        else:
-            ini_port = get_port_value_for_path(exe_dir)
-            text += f"\nПорт из INI: {ini_port or 'не найден'}"
-        texts.append(text)
+            port_blocks.append(f"PID {proc.pid}:\n{port_lines}" if len(rows) > 1 else port_lines)
     if not port_blocks:
-        return texts, None, None
-    return texts, "\n\n".join(port_blocks), f"Порты refsrv ({total_ports})"
+        return ordered, texts, None, None
+    return ordered, texts, "\n\n".join(port_blocks), f"Порты refsrv ({total_ports})"
 
 def _kill_checked(procs, checked):
     """Закрывает процессы, для которых в окне остался отмеченным флажок."""
@@ -2894,20 +3098,20 @@ def kill_refsrv_and_rk7man():
     rk7man_same = [p for p, d in rk7man_procs if d == ini_path_norm]
     rk7man_other = [(p, d) for p, d in rk7man_procs if d != ini_path_norm]
 
-    # Если оба из той же директории — сразу закрываем без запроса
-    if refsrv_same and rk7man_same:
+    # Если оба из той же директории (refsrv один) — сразу закрываем без запроса
+    if len(refsrv_same) == 1 and rk7man_same:
         refsrv_same[0].terminate()
         rk7man_same[0].terminate()
         return
 
     # Иначе — окно с флажками: entries[i] — строка окна, procs[i] — её процесс (None — просто текст).
-    # Процессы текущей версии — первыми, описание у всех одинаковое.
+    # refsrv: выбранная задача первой, остальные — новые сверху; rk7man — текущей версии первыми.
     entries, procs = [], []
     refsrv_list = [(p, ini_path_norm) for p in refsrv_same] + refsrv_other
     rk7man_list = [(p, ini_path_norm) for p in rk7man_same] + rk7man_other
 
     # Порты refsrv показываем свёрнутым блоком — нужны редко
-    refsrv_texts, refsrv_ports, refsrv_ports_label = _describe_refsrv_processes(refsrv_list)
+    refsrv_list, refsrv_texts, refsrv_ports, refsrv_ports_label = _describe_refsrv_processes(refsrv_list)
     for (p, _), text in zip(refsrv_list, refsrv_texts):
         entries.append((text, True))
         procs.append(p)
@@ -2938,17 +3142,19 @@ def kill_refsrv_process():
     same_dir = [(p, d) for p, d in procs if d == ini_path_norm]
     other_dir = [(p, d) for p, d in procs if d != ini_path_norm]
 
-    if same_dir:
+    if len(same_dir) == 1:
         same_dir[0][0].kill()
         return
 
-    if other_dir:
-        texts, port_details, port_label = _describe_refsrv_processes(other_dir)
+    # Несколько refsrv в этой версии или только из других — окно с флажками:
+    # выбранная задача первой, остальные — по времени запуска, новые сверху
+    if same_dir or other_dir:
+        listed, texts, port_details, port_label = _describe_refsrv_processes(same_dir + other_dir)
         checked = centered_askchecklist("Закрыть refsrv.exe", [(text, True) for text in texts],
                                         "Закрыть отмеченные процессы?",
                                         details=port_details, details_label=port_label)
         if checked:
-            _kill_checked([p for p, _ in other_dir], checked)
+            _kill_checked([p for p, _ in listed], checked)
         return
 
     for proc in psutil.process_iter(['pid', 'name']):
@@ -3187,15 +3393,26 @@ def adjust_port(delta):
         centered_warning("Порт", "Введите корректный номер порта (только цифры)")
         return
     new_port = max(1, min(65535, int(port) + delta))
-    port = str(new_port)
+    _set_port(str(new_port))
+
+def _set_port(port):
+    """Применяет порт в rk7srv.INI и rk7man.ini, обновляет поле порта
+    и сохраняет его в ini_settings задачи (и её активной версии) или в дефолты версии."""
     port_var.set(port)
     apply_port(ini_path, port)
-    # Сохраняем в ini_settings задачи (и её активной версии) или в дефолты версии
     task_id = task_id_var.get().strip()
     if task_id:
         _save_task_port(task_id, port)
     else:
         sync_default_settings_if_no_task()
+
+def _find_free_port_near(port, used_ports, max_offset=100):
+    """Ищет ближайший свободный порт: +1, -1, +2, -2 ... Возвращает None, если не найден."""
+    for offset in range(1, max_offset + 1):
+        for candidate in (port + offset, port - offset):
+            if 1 <= candidate <= 65535 and candidate not in used_ports:
+                return candidate
+    return None
 
 def _save_task_port(task_id, port, data=None):
     """Сохраняет Port в ini_settings задачи и её активной версии (по ini_path).
@@ -3882,6 +4099,41 @@ delete_zip_desc_label = tk.Label(
     anchor="w"
 )
 delete_zip_desc_label.pack(padx=(30, 10), pady=(0, 10), anchor="w", fill="x")
+
+# ======================= Вкладка "Что нового" =======================
+changelog_tab = tk.Frame(notebook)
+notebook.add(changelog_tab, text="Что нового")
+
+changelog_scroll = tk.Scrollbar(changelog_tab, orient="vertical")
+changelog_text = tk.Text(
+    changelog_tab,
+    wrap="word",
+    font="TkDefaultFont",
+    relief="flat",
+    borderwidth=0,
+    background=changelog_tab.cget("background"),
+    cursor="arrow",
+    padx=10,
+    pady=8,
+    yscrollcommand=changelog_scroll.set
+)
+changelog_scroll.config(command=changelog_text.yview)
+changelog_scroll.pack(side="right", fill="y")
+changelog_text.pack(side="left", fill="both", expand=True)
+
+changelog_text.tag_configure("version", font=("TkDefaultFont", 9, "bold"), spacing1=8)
+changelog_text.tag_configure("current", font=("TkDefaultFont", 8), foreground="green4")
+changelog_text.tag_configure("date", font=("TkDefaultFont", 8), foreground="gray40")
+changelog_text.tag_configure("item", lmargin1=8, lmargin2=20, spacing1=1)
+
+for entry in CHANGELOG:
+    changelog_text.insert("end", entry["version"], "version")
+    if entry["version"] == SCRIPT_VERSION:
+        changelog_text.insert("end", "  текущая", ("version", "current"))
+    changelog_text.insert("end", f"  {entry['date']}\n", ("version", "date"))
+    for item in entry["items"]:
+        changelog_text.insert("end", f"•  {item}\n", "item")
+changelog_text.config(state="disabled")
 
 # Info tab
 info_tab = tk.Frame(notebook)
