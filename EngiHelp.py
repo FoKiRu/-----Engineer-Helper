@@ -53,7 +53,7 @@ from modules.version_updater import check_rk_updates, download_version, extract_
 from modules.changelog import CHANGELOG
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.9.36"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.0.0.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
