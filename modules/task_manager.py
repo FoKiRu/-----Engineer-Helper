@@ -199,6 +199,59 @@ def create_task_for_version(task_id, version_path):
 
     return True, f"Задача {task_id} создана"
 
+def relocate_task(task_id, version_folder):
+    """Меняет пути задачи после ручного переноса её папки.
+    version_folder — папка версии RK (INST..., либо её bin или bin/win); в ней ищется
+    папка задачи {версия}/{задача}/base (rk7srv.INI ссылается на базу путём ..\\..\\{задача}\\base).
+    Обновляются ini_path, base_path и midbase_path задачи и её активной версии;
+    если задачу перенесли в другую версию RK — запись версии переименовывается.
+    Возвращает (успех, сообщение)."""
+    # Корень версии: выбранная папка, либо на уровень-два выше, если выбрали bin или bin/win.
+    # INI-файлов в bin/win может ещё не быть (их добавляют позже) — достаточно самой папки bin/win.
+    product_root = os.path.normpath(version_folder)
+    if os.path.basename(product_root).lower() == "win":
+        product_root = os.path.dirname(product_root)
+    if os.path.basename(product_root).lower() == "bin":
+        product_root = os.path.dirname(product_root)
+    if not os.path.isdir(os.path.join(product_root, "bin", "win")):
+        return False, f"Выбранная папка не является папкой версии RK (нет папки bin\\win):\n{version_folder}"
+    folder = os.path.join(product_root, task_id)
+    base_path = os.path.join(folder, "base")
+    if not os.path.isdir(base_path):
+        return False, (f"В версии {os.path.basename(product_root)} задачи {task_id} нет —\n"
+                       f"не найдена папка {base_path}")
+
+    def _fwd(p):
+        return p.replace("\\", "/")
+
+    new_ini_path = _fwd(os.path.join(product_root, "bin", "win"))
+    new_base_path = _fwd(base_path)
+    midbase_dir = os.path.join(folder, "MIDBASE")
+    new_midbase_path = _fwd(midbase_dir) if os.path.isdir(midbase_dir) else None
+
+    data = load_data()
+    task_info = data.get("tasks", {}).get(task_id)
+    if task_info is None:
+        return False, f"Задача {task_id} не найдена"
+
+    old_ini_norm = _norm_path(task_info.get("ini_path"))
+    versions = task_info.get("versions", {})
+    old_key = next((k for k, v in versions.items() if _norm_path(v.get("ini_path")) == old_ini_norm), None)
+    new_key = extract_rk_version_from_path(new_ini_path)
+
+    for entry in [task_info] + ([versions[old_key]] if old_key else []):
+        entry["ini_path"] = new_ini_path
+        entry["base_path"] = new_base_path
+        if new_midbase_path:
+            entry["midbase_path"] = new_midbase_path
+        else:
+            entry.pop("midbase_path", None)
+    if old_key and new_key and new_key != old_key:
+        versions[new_key] = versions.pop(old_key)
+
+    save_data(data)
+    return True, f"Пути задачи {task_id} обновлены:\n{new_base_path}"
+
 def find_last_running_task(exe_dir: str) -> tuple[bool, str | None]:
     """Определяет задачу, с базой которой последней работал refsrv из exe_dir (bin/win).
     rk7srv.INI для этого не годится — его могли перенастроить на другую задачу

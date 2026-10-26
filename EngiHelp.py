@@ -32,11 +32,12 @@ from modules.dialogs import centered_askyesno, centered_askchecklist, centered_a
 from modules.data_manager import load_data, save_data, load_settings_and_paths, get_task_data
 from modules.data_manager import save_settings_and_path as _save_recent_path
 from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
+from modules.data_manager import get_task_base_paths, task_folder_exists
 from modules.ini_utils import set_port_rk7srv, set_port_rk7man, apply_port
 from modules.ini_utils import FILES, detect_consensus_value, get_usesql_value, get_port_value, get_port_value_for_path
 from modules.ini_utils import get_refserver_name, update_ini_file, update_rkeeper_ini_basepath
 from modules.ini_utils import update_rk7srv_ini, get_ini_settings, check_files, apply_rk7srv_udf_workmodules
-from modules.ini_utils import get_rk7srv_udb_workmodules
+from modules.ini_utils import get_rk7srv_udb_workmodules, get_usedbsync_values
 from modules.process_utils import kill_midserv, kill_doscash
 from modules.process_utils import kill_processes_for_version_change, get_used_ports, get_process_by_name, is_process_running
 from modules.process_utils import get_port_info, get_rk7man_port_info, get_process_listening_ports
@@ -47,11 +48,12 @@ from modules.task_manager import extract_task_id_from_rk7srv_ini, find_product_r
 from modules.task_manager import extract_rk_version_from_path, find_available_rk_versions
 from modules.task_manager import create_task_for_version
 from modules.task_manager import find_running_task_by_ports, find_last_running_task, _main_refsrv_port
+from modules.task_manager import relocate_task
 from modules.version_updater import check_rk_updates, download_version, extract_zip
 from modules.changelog import CHANGELOG
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v1.9.9.35"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v1.9.9.36"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -94,8 +96,16 @@ if icon_path:
    root.iconbitmap(icon_path)  # Применяем иконку к главному окну
 dialogs.init(root, icon_path)  # root и иконка для всех centered_* окон
 
-# Размеры главного окна
-WINDOW_WIDTH = 412
+# Размеры главного окна (слева — панель со списком задач, если включена в «Настройках»)
+BASE_WINDOW_WIDTH = 412
+TASK_PANEL_WIDTH = 70
+show_task_panel_var = tk.BooleanVar(value=load_data()["settings"].get("show_task_panel", True))
+
+def get_window_width():
+    """Ширина главного окна с учётом панели задач."""
+    return BASE_WINDOW_WIDTH + (TASK_PANEL_WIDTH if show_task_panel_var.get() else 0)
+
+WINDOW_WIDTH = get_window_width()
 WINDOW_HEIGHT = 510
 WINDOW_OFFSET_X = 223
 WINDOW_OFFSET_Y = 100   
@@ -146,6 +156,26 @@ else:
     y = max(0, min(screen_height - WINDOW_HEIGHT, cursor_y - WINDOW_OFFSET_Y))
 
 root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
+
+# Панель задач слева (заполняется в refresh_task_panel, показ — toggle_task_panel)
+task_panel = tk.Frame(root, width=TASK_PANEL_WIDTH)
+if show_task_panel_var.get():
+    task_panel.pack(side="left", fill="y")
+task_panel.pack_propagate(False)
+tk.Label(task_panel, text="Задачи", font=("TkDefaultFont", 8, "bold")).pack(pady=(4, 2))
+# Рамка вокруг списка с фоном списка — даёт отступ текста от левого края
+task_list_frame = tk.Frame(task_panel, relief="solid", borderwidth=1)
+task_list_frame.pack(fill="both", expand=True, padx=(4, 2), pady=(0, 4))
+task_listbox = tk.Listbox(
+    task_list_frame,
+    activestyle="none",
+    exportselection=False,
+    borderwidth=0,
+    highlightthickness=0,
+    font=("TkDefaultFont", 9)
+)
+task_list_frame.config(background=task_listbox.cget("background"))
+task_listbox.pack(fill="both", expand=True, padx=(10, 0))
 
 notebook = ttk.Notebook(root)
 notebook.pack(fill="both", expand=True)
@@ -749,6 +779,39 @@ def apply_path_silent():
         INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
         save_settings_and_path(ini_path)
 
+def _handle_missing_task_folder(task_id, task_info, old_task_id):
+    """Папка задачи не найдена (удалена или перенесена вручную): предлагает указать новый путь,
+    удалить задачу из списка или отменить выбор (тогда возвращается предыдущая задача)."""
+    paths = "\n".join(get_task_base_paths(task_info))
+    choice = centered_askchoice(
+        "Папка задачи не найдена",
+        f"Папка задачи {task_id} не найдена — вероятно, удалена или перенесена вручную:\n"
+        f"{paths}\n\nЕсли задачу перенесли в другую версию — укажите папку этой версии (INST...).",
+        ["Указать новый путь", "Удалить из списка", "Отмена"]
+    )
+    if choice == 0:
+        # Начинаем выбор с папки, где лежат версии (над старым INST...), или ближайшей существующей
+        old_base = get_task_base_paths(task_info)[0] if paths else ""
+        start_dir = os.path.dirname(os.path.dirname(os.path.dirname(old_base))) if old_base else ""
+        while start_dir and not os.path.isdir(start_dir) and os.path.dirname(start_dir) != start_dir:
+            start_dir = os.path.dirname(start_dir)
+        version_folder = filedialog.askdirectory(
+            title=f"Папка версии RK (INST...), в которую перенесена задача {task_id}",
+            initialdir=start_dir or None
+        )
+        if version_folder:
+            ok, message = relocate_task(task_id, version_folder)
+            if ok:
+                print(f"[TASK] {message}")
+                root.after(0, lambda: task_id_var.set(task_id))  # применяем задачу уже по новым путям
+                return
+            centered_error("Не удалось изменить путь", message)
+    elif choice == 1:
+        root.after(0, lambda: delete_task(confirm=False))
+        return
+    # Отмена — возвращаем предыдущую задачу (её настройки применятся заново)
+    root.after(0, lambda: task_id_var.set(old_task_id or ""))
+
 def on_task_selected(event):
     global _prev_task_id, _forced_version
 
@@ -779,6 +842,13 @@ def on_task_selected(event):
         return
 
     task_info = tasks[selected_task_id]
+
+    # === ПРОВЕРКА, ЧТО ПАПКА ЗАДАЧИ СУЩЕСТВУЕТ ===
+    # Папку могли удалить вручную — такую задачу применять нельзя (INI укажут на несуществующую базу)
+    if not task_folder_exists(task_info):
+        _prev_task_id = ""  # данные старой задачи уже сохранены выше, в удалённую ничего не пишем
+        _handle_missing_task_folder(selected_task_id, task_info, old_task_id)
+        return
 
     # === ПРОВЕРКА НА НЕСКОЛЬКО ВЕРСИЙ ===
     versions = task_info.get("versions", {})
@@ -1842,6 +1912,61 @@ def _on_task_id_change(*_):
 _prev_task_id = task_id_var.get().strip()
 task_id_var.trace_add("write", _on_task_id_change)
 
+# ======================= Панель задач слева =======================
+_task_panel_state = None  # (задачи, задачи версии, выбранная) — перерисовываем только при изменениях
+
+def refresh_task_panel():
+    """Список задач на панели слева в том же порядке, что в «Номер задачи».
+    Задачи текущей версии — обычным цветом, остальных версий — серым,
+    задачи, папки которых не найдены на диске, — красным; выбранная выделена."""
+    global _task_panel_state
+    if not show_task_panel_var.get():
+        return
+    tasks = [str(t) for t in task_id_combobox['values'] if str(t)]
+    version_tasks = set(find_tasks_for_path(ini_path)) if ini_path else set()
+    all_tasks = load_data().get("tasks", {})
+    missing_tasks = {t for t in tasks if t in all_tasks and not task_folder_exists(all_tasks[t])}
+    selected = task_id_var.get().strip()
+    state = (tuple(tasks), frozenset(version_tasks), frozenset(missing_tasks), selected)
+    if state == _task_panel_state:
+        return
+    _task_panel_state = state
+
+    task_listbox.delete(0, "end")
+    for i, task in enumerate(tasks):
+        task_listbox.insert("end", task)
+        if task in missing_tasks:
+            task_listbox.itemconfig(i, foreground="red3")  # папка задачи удалена
+        elif task not in version_tasks:
+            task_listbox.itemconfig(i, foreground="gray55")
+    if selected in tasks:
+        index = tasks.index(selected)
+        task_listbox.selection_set(index)
+        task_listbox.see(index)
+
+def _on_task_panel_select(event):
+    """Клик по задаче на панели — выбор задачи, как в списке «Номер задачи»."""
+    selection = task_listbox.curselection()
+    if not selection:
+        return
+    task_id_var.set(task_listbox.get(selection[0]))  # trace применит задачу
+    refresh_task_panel()
+
+task_listbox.bind("<<ListboxSelect>>", _on_task_panel_select)
+refresh_task_panel()
+
+def toggle_task_panel():
+    """Показывает или скрывает панель задач и меняет ширину окна (позиция окна сохраняется)."""
+    global _task_panel_state
+    if show_task_panel_var.get():
+        task_panel.pack(side="left", fill="y", before=notebook)
+        _task_panel_state = None  # пока панель была скрыта, список не обновлялся
+        refresh_task_panel()
+    else:
+        task_panel.pack_forget()
+    root.geometry(f"{get_window_width()}x{WINDOW_HEIGHT}")
+    save_prefs_flags()
+
 def save_task_id_to_file():
     task_id = task_id_var.get().strip()
     if not task_id:
@@ -2097,7 +2222,9 @@ def save_task_id():
 
 # load_task_ids импортирована из modules.data_manager
 
-def delete_task():
+def delete_task(confirm=True):
+    """Удаляет выбранную задачу: папки base/MIDBASE, папку задачи и запись в JSON.
+    confirm=False — без окна подтверждения (уже спросили, например когда папка задачи не найдена)."""
     selected_task_id = task_id_var.get().strip()
     if not selected_task_id:
         centered_warning("Предупреждение", "Выберите задачу для удаления!")
@@ -2159,7 +2286,7 @@ def delete_task():
         ver_list = ", ".join(versions.keys())
         confirm_msg += f"\n\nВерсии RK в задаче: {ver_list}"
 
-    if not centered_askyesno("Подтверждение удаления", confirm_msg):
+    if confirm and not centered_askyesno("Подтверждение удаления", confirm_msg):
         return
 
     # === Шаг 0: Восстанавливаем дефолтные INI-настройки для всех связанных путей ===
@@ -2773,6 +2900,21 @@ def start_refsrv_only(ask_if_running=True, upgrade_anytime=False):
                          f"Для нового refsrv имя изменено на {new_name}.")
         server_name = new_name
 
+    # UseDBSync=1 допустим только у одного запущенного refsrv
+    if _rk7srv_dbsync(ini_path) == "1":
+        dbsync_servers = [get_running_refsrv_name(p, d) or f"PID {p.pid}"
+                          for p, d in running if get_running_refsrv_dbsync(p, d) == "1"]
+        if dbsync_servers:
+            usedbsync_var.set(0)
+            toggle_usedbsync()  # пишет 0 во все INI, в задачу (или дефолты версии)
+            task_id = task_id_var.get().strip()
+            target = f"для задачи {task_id}" if task_id else "для этой версии"
+            print(f"[UseDBSync] Уже запущен refsrv с UseDBSync=1 ({', '.join(dbsync_servers)}), {target} -> 0")
+            centered_warning("UseDBSync",
+                             f"Уже запущен RefServer с параметром UseDBSync = 1 "
+                             f"({', '.join(dbsync_servers)}).\n"
+                             f"Поэтому {target} параметр UseDBSync изменён на 0.")
+
     launch_ini_path = ini_path
     if upgrade_anytime and not set_upgrade_anytime("1", launch_ini_path):
         return
@@ -2791,7 +2933,8 @@ def start_refsrv_only(ask_if_running=True, upgrade_anytime=False):
         logging.info("refsrv.exe запущен (UpgradeAnyTime)")
         root.after(500, lambda: _reset_upgrade_anytime_after_start(launch_ini_path, before_pids))
 
-    launch = {"name": server_name, "udb": _current_udb(launch_ini_path)}
+    launch = {"name": server_name, "udb": _current_udb(launch_ini_path),
+              "dbsync": _rk7srv_dbsync(launch_ini_path)}
     root.after(500, lambda: _remember_refsrv_launch(ini_path_norm, before_pids, launch))
 
 def _kill_and_wait(procs, timeout=10):
@@ -2830,6 +2973,29 @@ def _current_udb(ini_path_val):
 def get_running_refsrv_name(proc, exe_dir):
     """Имя REFSERVER, с которым запущен refsrv."""
     return _get_refsrv_launch(proc).get("name") or get_refserver_name(exe_dir)
+
+def _rk7srv_dbsync(ini_path_val):
+    """UseDBSync из rk7srv.INI ("1"/"0")."""
+    return get_usedbsync_values(ini_path_val).get("rk7srv.INI", "0")
+
+def get_running_refsrv_dbsync(proc, exe_dir):
+    """UseDBSync, с которым запущен refsrv: запомненный при запуске, иначе из настроек
+    его задачи для этой версии в JSON, иначе из rk7srv.INI его папки."""
+    launch = _get_refsrv_launch(proc)
+    if "dbsync" in launch:
+        return launch["dbsync"]
+    found, task_id = _running_refsrv_task(proc, exe_dir, get_process_listening_ports(proc.pid))
+    if found and task_id:
+        task_info = load_data().get("tasks", {}).get(task_id, {})
+        exe_norm = os.path.normpath(exe_dir).lower()
+        entries = list(task_info.get("versions", {}).values()) + [task_info]
+        for entry in entries:
+            if os.path.normpath(entry.get("ini_path", "")).lower() != exe_norm:
+                continue
+            value = (entry.get("ini_settings") or {}).get("UseDBSync")
+            if isinstance(value, dict) and value.get("rk7srv.INI"):
+                return str(value["rk7srv.INI"])
+    return _rk7srv_dbsync(exe_dir)
 
 def _is_same_refsrv(proc, exe_dir):
     """True — refsrv относится к выбранной задаче (задача не выбрана — работает с базой без задачи),
@@ -4035,6 +4201,7 @@ def save_prefs_flags(*_):
     data["settings"]["task_from_version"] = task_from_version_var.get()
     data["settings"]["keep_cloud_files"] = keep_cloud_files_var.get()
     data["settings"]["delete_zip_after_extract"] = delete_zip_after_extract_var.get()
+    data["settings"]["show_task_panel"] = show_task_panel_var.get()
     save_data(data)
 
 tk.Checkbutton(
@@ -4100,6 +4267,24 @@ delete_zip_desc_label = tk.Label(
 )
 delete_zip_desc_label.pack(padx=(30, 10), pady=(0, 10), anchor="w", fill="x")
 
+tk.Checkbutton(
+    prefs_tab,
+    text="Показывать панель задач",
+    variable=show_task_panel_var,
+    command=toggle_task_panel
+).pack(padx=10, pady=(5, 2), anchor="w")
+
+task_panel_desc_label = tk.Label(
+    prefs_tab,
+    text="Список задач слева от вкладок. Клик по задаче выбирает её; задачи других версий — серым.",
+    justify="left",
+    fg="gray40",
+    font=("TkDefaultFont", 8),
+    wraplength=350,
+    anchor="w"
+)
+task_panel_desc_label.pack(padx=(30, 10), pady=(0, 10), anchor="w", fill="x")
+
 # ======================= Вкладка "Что нового" =======================
 changelog_tab = tk.Frame(notebook)
 notebook.add(changelog_tab, text="Что нового")
@@ -4152,6 +4337,8 @@ def update_every_1_seconds():
     update_ini_info_by_priority()
     # Проверяем файлы и обновляем состояние
     on_check()
+    # Обновляем список задач на панели слева (задачи могли добавить, удалить или сменить)
+    refresh_task_panel()
     # Планируем следующее обновление через 1000 миллисекунд (1 секунд)
     root.after(1000, update_every_1_seconds)
 

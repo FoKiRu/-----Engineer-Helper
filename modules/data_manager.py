@@ -155,6 +155,23 @@ def find_tasks_for_path(target_path):
             found.append(task_id)
     return found
 
+def get_task_base_paths(task_info):
+    """Все пути base задачи: основной и из каждой версии (без повторов)."""
+    paths = [task_info.get("base_path")]
+    paths += [v.get("base_path") for v in task_info.get("versions", {}).values()]
+    result = []
+    for p in paths:
+        if p and os.path.normpath(p) not in result:
+            result.append(os.path.normpath(p))
+    return result
+
+def task_folder_exists(task_info):
+    """True, если на диске есть хотя бы одна папка base задачи.
+    False — папки задачи удалены (например, вручную, не через программу).
+    Задача без сохранённых путей считается существующей."""
+    paths = get_task_base_paths(task_info)
+    return not paths or any(os.path.isdir(p) for p in paths)
+
 def get_current_task_base_path(task_id):
     """Возвращает путь к папке base для задачи."""
     if not task_id:
