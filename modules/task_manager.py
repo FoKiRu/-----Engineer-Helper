@@ -199,58 +199,295 @@ def create_task_for_version(task_id, version_path):
 
     return True, f"Задача {task_id} создана"
 
-def relocate_task(task_id, version_folder):
-    """Меняет пути задачи после ручного переноса её папки.
-    version_folder — папка версии RK (INST..., либо её bin или bin/win); в ней ищется
-    папка задачи {версия}/{задача}/base (rk7srv.INI ссылается на базу путём ..\\..\\{задача}\\base).
-    Обновляются ini_path, base_path и midbase_path задачи и её активной версии;
-    если задачу перенесли в другую версию RK — запись версии переименовывается.
-    Возвращает (успех, сообщение)."""
-    # Корень версии: выбранная папка, либо на уровень-два выше, если выбрали bin или bin/win.
-    # INI-файлов в bin/win может ещё не быть (их добавляют позже) — достаточно самой папки bin/win.
-    product_root = os.path.normpath(version_folder)
+def version_root_from_folder(folder):
+    """Корень версии RK для выбранной папки: сама папка, либо на уровень-два выше,
+    если выбрали bin или bin/win. None — если в корне нет bin/win.
+    INI-файлов в bin/win может ещё не быть (их добавляют позже) — достаточно самой папки."""
+    product_root = os.path.normpath(folder)
     if os.path.basename(product_root).lower() == "win":
         product_root = os.path.dirname(product_root)
     if os.path.basename(product_root).lower() == "bin":
         product_root = os.path.dirname(product_root)
-    if not os.path.isdir(os.path.join(product_root, "bin", "win")):
-        return False, f"Выбранная папка не является папкой версии RK (нет папки bin\\win):\n{version_folder}"
-    folder = os.path.join(product_root, task_id)
-    base_path = os.path.join(folder, "base")
-    if not os.path.isdir(base_path):
-        return False, (f"В версии {os.path.basename(product_root)} задачи {task_id} нет —\n"
-                       f"не найдена папка {base_path}")
+    return product_root if os.path.isdir(os.path.join(product_root, "bin", "win")) else None
 
-    def _fwd(p):
-        return p.replace("\\", "/")
+def version_root_from_ini_path(ini_path):
+    """Корень версии по пути bin/win (без проверки, что он существует)."""
+    return os.path.dirname(os.path.dirname(os.path.normpath(ini_path))) if ini_path else ""
 
-    new_ini_path = _fwd(os.path.join(product_root, "bin", "win"))
-    new_base_path = _fwd(base_path)
-    midbase_dir = os.path.join(folder, "MIDBASE")
-    new_midbase_path = _fwd(midbase_dir) if os.path.isdir(midbase_dir) else None
+def _version_key_for_root(product_root):
+    """Ключ версии в task_info["versions"] по папке версии: INST7.26.04.2000 -> 7.26.04.2000."""
+    name = os.path.basename(os.path.normpath(product_root))
+    m = re.match(r'^INST(.+)$', name, re.IGNORECASE)
+    return m.group(1) if m else name
+
+def _is_missing(path):
+    return bool(path) and not os.path.isdir(path)
+
+def get_missing_versions(task_info):
+    """Ключи версий задачи, папка base которых не найдена на диске.
+    Для задачи без versions — [None], если не найдена её base."""
+    versions = task_info.get("versions", {})
+    if not versions:
+        return [None] if _is_missing(task_info.get("base_path")) else []
+    return [k for k, v in versions.items() if _is_missing(v.get("base_path"))]
+
+def relocate_task(task_id, version_folder, version_key=None):
+    """Меняет пути задачи после ручного переноса её папки.
+    version_folder — папка версии RK (INST..., либо её bin или bin/win); в ней ищется
+    папка задачи {версия}/{задача}/base (rk7srv.INI ссылается на базу путём ..\\..\\{задача}\\base).
+    Папки старого формата base_{задача} / MIDBASE_{задача} переводятся в новый (с ярлыками),
+    в папке задачи нового формата без ярлыков ярлыки создаются.
+    version_key — какую версию задачи перенести (None — активную). Обновляются ini_path,
+    base_path и midbase_path этой версии, а если она активная — и самой задачи;
+    если задачу перенесли в другую версию RK — запись версии переименовывается.
+    Возвращает (успех, сообщение, ключ версии после переноса)."""
+    product_root = version_root_from_folder(version_folder)
+    if not product_root:
+        return False, f"Выбранная папка не является папкой версии RK (нет папки bin\\win):\n{version_folder}", None
 
     data = load_data()
     task_info = data.get("tasks", {}).get(task_id)
     if task_info is None:
-        return False, f"Задача {task_id} не найдена"
-
-    old_ini_norm = _norm_path(task_info.get("ini_path"))
+        return False, f"Задача {task_id} не найдена", None
     versions = task_info.get("versions", {})
-    old_key = next((k for k, v in versions.items() if _norm_path(v.get("ini_path")) == old_ini_norm), None)
-    new_key = extract_rk_version_from_path(new_ini_path)
+    if version_key is None:
+        old_ini_norm = _norm_path(task_info.get("ini_path"))
+        version_key = next((k for k, v in versions.items() if _norm_path(v.get("ini_path")) == old_ini_norm), None)
+    elif version_key not in versions:
+        return False, f"У задачи {task_id} нет версии {version_key}", None
+    else:
+        old_ini_norm = _norm_path(versions[version_key].get("ini_path"))
+    new_key = _version_key_for_root(product_root) if version_key else None
+    if version_key and new_key != version_key and new_key in versions:
+        return False, f"У задачи {task_id} уже есть версия {new_key}", None
 
-    for entry in [task_info] + ([versions[old_key]] if old_key else []):
-        entry["ini_path"] = new_ini_path
-        entry["base_path"] = new_base_path
-        if new_midbase_path:
-            entry["midbase_path"] = new_midbase_path
-        else:
-            entry.pop("midbase_path", None)
-    if old_key and new_key and new_key != old_key:
-        versions[new_key] = versions.pop(old_key)
+    ok, result = _prepare_task_folder(product_root, task_id)
+    if not ok:
+        return False, result, None
+    paths, notes = result
+
+    entries = [versions[version_key]] if version_key else []
+    if not versions or _norm_path(task_info.get("ini_path")) == old_ini_norm:
+        entries.append(task_info)  # переносится активная версия — меняем и пути самой задачи
+    for entry in entries:
+        _set_entry_paths(entry, paths)
+    if version_key and new_key != version_key:
+        versions[new_key] = versions.pop(version_key)
 
     save_data(data)
-    return True, f"Пути задачи {task_id} обновлены:\n{new_base_path}"
+    return True, "\n\n".join([f"Пути задачи {task_id} обновлены:\n{paths['base_path']}"] + notes), new_key
+
+def add_found_task_version(task_id, version_folder):
+    """Задача найдена ещё в одной версии RK (после ручного переноса) — добавляет эту версию
+    в task_info["versions"] с настройками INI задачи. Активная версия не меняется.
+    Если такая версия у задачи уже есть, но её папка не найдена — обновляет её пути.
+    Возвращает (успех, сообщение)."""
+    product_root = version_root_from_folder(version_folder)
+    if not product_root:
+        return False, f"Папка не является папкой версии RK (нет папки bin\\win):\n{version_folder}"
+    data = load_data()
+    task_info = data.get("tasks", {}).get(task_id)
+    if task_info is None:
+        return False, f"Задача {task_id} не найдена"
+    versions = task_info.setdefault("versions", {})
+    key = _version_key_for_root(product_root)
+    if key in versions and not _is_missing(versions[key].get("base_path")):
+        return True, f"Версия {key} уже есть у задачи {task_id}"
+
+    ok, result = _prepare_task_folder(product_root, task_id)
+    if not ok:
+        return False, result
+    paths, notes = result
+
+    if not versions and task_info.get("ini_path"):
+        # У задачи была одна версия без списка versions — заносим в список и её
+        current_key = _version_key_for_root(version_root_from_ini_path(task_info["ini_path"]))
+        versions[current_key] = {k: task_info[k] for k in ("ini_path", "base_path", "midbase_path")
+                                 if task_info.get(k)}
+        versions[current_key]["ini_settings"] = task_info.get("ini_settings", {})
+    entry = versions.setdefault(key, {"ini_settings": dict(task_info.get("ini_settings", {}))})
+    _set_entry_paths(entry, paths)
+    save_data(data)
+    return True, "\n\n".join([f"Задаче {task_id} добавлена версия {key}:\n{paths['base_path']}"] + notes)
+
+def _prepare_task_folder(product_root, task_id):
+    """Проверяет папку задачи в версии: старый формат base_{задача} переводит в новый,
+    в папке нового формата без ярлыков создаёт ярлыки.
+    Возвращает (True, (пути для записи в JSON, заметки)) или (False, ошибка)."""
+    bin_win = os.path.join(product_root, "bin", "win")
+    folder = os.path.join(product_root, task_id)
+    base_path = os.path.join(folder, "base")
+    notes = []
+    if not os.path.isdir(base_path):
+        # Старый формат base_{задача} / MIDBASE_{задача} — переводим в {задача}/base и {задача}/MIDBASE
+        ok, result = convert_old_task_folders(product_root, task_id)
+        if not ok:
+            return False, result
+        if result is None:
+            return False, (f"В версии {os.path.basename(product_root)} задачи {task_id} нет —\n"
+                           f"не найдены папки {base_path} и "
+                           f"{os.path.join(product_root, 'base_' + task_id)}")
+        notes.append(result)
+    elif not os.path.isfile(os.path.join(folder, "refsrv.lnk")):
+        create_task_shortcuts(folder, bin_win)
+        notes.append("Созданы ярлыки в папке задачи.")
+
+    def _fwd(p):
+        return p.replace("\\", "/")
+
+    midbase_dir = os.path.join(folder, "MIDBASE")
+    if not os.path.isdir(midbase_dir):
+        try:
+            os.makedirs(midbase_dir)
+            notes.append(f"Создана пустая папка {task_id}\\MIDBASE.")
+        except OSError as e:
+            notes.append(f"Не удалось создать {midbase_dir}: {e}")
+    paths = {
+        "ini_path": _fwd(bin_win),
+        "base_path": _fwd(base_path),
+        "midbase_path": _fwd(midbase_dir) if os.path.isdir(midbase_dir) else None,
+    }
+    return True, (paths, notes)
+
+def ensure_task_midbase(task_id):
+    """У задачи или её версии нет midbase_path (папки MIDBASE не было при переносе) —
+    создаёт пустую {задача}/MIDBASE рядом с base и записывает путь в JSON.
+    Только для нового формата и только если папка base на месте. True — что-то изменено."""
+    data = load_data()
+    task_info = data.get("tasks", {}).get(task_id)
+    if not task_info:
+        return False
+    changed = False
+    for entry in [task_info] + list(task_info.get("versions", {}).values()):
+        base_path = entry.get("base_path")
+        if not base_path or not os.path.isdir(base_path) or os.path.basename(os.path.normpath(base_path)) != "base":
+            continue
+        midbase_dir = os.path.join(os.path.dirname(os.path.normpath(base_path)), "MIDBASE")
+        if entry.get("midbase_path") and _norm_path(entry["midbase_path"]) == _norm_path(midbase_dir) \
+                and os.path.isdir(midbase_dir):
+            continue
+        try:
+            os.makedirs(midbase_dir, exist_ok=True)
+        except OSError as e:
+            print(f"[MIDBASE] Не удалось создать {midbase_dir}: {e}")
+            continue
+        entry["midbase_path"] = midbase_dir.replace("\\", "/")
+        changed = True
+    if changed:
+        save_data(data)
+    return changed
+
+def _set_entry_paths(entry, paths):
+    """Записывает пути из _prepare_task_folder в запись задачи или её версии."""
+    entry["ini_path"] = paths["ini_path"]
+    entry["base_path"] = paths["base_path"]
+    if paths["midbase_path"]:
+        entry["midbase_path"] = paths["midbase_path"]
+    else:
+        entry.pop("midbase_path", None)
+
+def find_missing_entries_in_version(old_root):
+    """Записи задач, которые указывают на версию old_root и чья папка base не найдена.
+    Возвращает список (task_id, ключ версии или None — задача без versions)."""
+    old_norm = _norm_path(old_root)
+    result = []
+    for task_id, task_info in load_data().get("tasks", {}).items():
+        versions = task_info.get("versions", {})
+        candidates = list(versions.items()) if versions else [(None, task_info)]
+        for key, entry in candidates:
+            if (_norm_path(version_root_from_ini_path(entry.get("ini_path"))) == old_norm
+                    and _is_missing(entry.get("base_path"))):
+                result.append((task_id, key))
+    return result
+
+def move_version_settings(old_root, new_root):
+    """После переноса версии целиком: дефолтные настройки версии (defaults) и путь
+    в истории путей переводятся со старого bin/win на новый."""
+    old_ini = _norm_path(os.path.join(old_root, "bin", "win"))
+    new_ini = os.path.join(new_root, "bin", "win").replace("\\", "/")
+    data = load_data()
+    changed = False
+    defaults = data.get("defaults", {})
+    for key in list(defaults):
+        if _norm_path(key) == old_ini and new_ini not in defaults:
+            entry = defaults.pop(key)
+            entry["ini_path"] = new_ini
+            defaults[new_ini] = entry
+            changed = True
+    recent = data.get("settings", {}).get("recent_paths", [])
+    for i, p in enumerate(recent):
+        if _norm_path(p) == old_ini:
+            recent[i] = new_ini
+            changed = True
+    if changed:
+        data["settings"]["recent_paths"] = list(dict.fromkeys(recent))
+        save_data(data)
+    return changed
+
+def find_version_roots(folder, max_depth=3):
+    """Папки версий RK (в которых есть bin/win) — сама folder или вложенные в неё
+    на глубину до max_depth уровней. Внутрь найденной версии поиск не идёт."""
+    roots = []
+
+    def _walk(path, depth):
+        if os.path.isdir(os.path.join(path, "bin", "win")):
+            roots.append(path)
+            return
+        if depth >= max_depth:
+            return
+        try:
+            with os.scandir(path) as entries:
+                subdirs = sorted(e.path for e in entries if e.is_dir(follow_symlinks=False))
+        except OSError:
+            return
+        for sub in subdirs:
+            _walk(sub, depth + 1)
+
+    _walk(os.path.normpath(folder), 0)
+    return roots
+
+def find_task_in_versions(folder, task_id):
+    """Ищет папку задачи во всех версиях RK внутри folder (или в самой folder, если это версия).
+    Возвращает (список (корень версии, старый_формат), сколько версий проверено);
+    старый_формат=True — найдена base_{задача} вместо {задача}/base."""
+    roots = find_version_roots(folder)
+    found = []
+    for product_root in roots:
+        if os.path.isdir(os.path.join(product_root, task_id, "base")):
+            found.append((product_root, False))
+        elif os.path.isdir(os.path.join(product_root, f"base_{task_id}")):
+            found.append((product_root, True))
+    return found, len(roots)
+
+def convert_old_task_folders(product_root, task_id):
+    """Переводит папки задачи старого формата в новый:
+    {корень}/base_{задача}   -> {корень}/{задача}/base
+    {корень}/MIDBASE_{задача} -> {корень}/{задача}/MIDBASE (нет — создаётся пустая)
+    и создаёт ярлыки в папке задачи.
+    Возвращает (True, описание) после перевода, (True, None) — папок старого формата нет,
+    (False, ошибка) — перенести не удалось (например, база занята refsrv)."""
+    old_base = os.path.join(product_root, f"base_{task_id}")
+    if not os.path.isdir(old_base):
+        return True, None
+    old_midbase = os.path.join(product_root, f"MIDBASE_{task_id}")
+    folder = os.path.join(product_root, task_id)
+    new_base = os.path.join(folder, "base")
+    new_midbase = os.path.join(folder, "MIDBASE")
+    try:
+        os.makedirs(folder, exist_ok=True)
+        shutil.move(old_base, new_base)
+        if os.path.isdir(old_midbase) and not os.path.exists(new_midbase):
+            shutil.move(old_midbase, new_midbase)
+            midbase_note = f"MIDBASE_{task_id} → {task_id}\\MIDBASE"
+        else:
+            os.makedirs(new_midbase, exist_ok=True)
+            midbase_note = f"создана пустая {task_id}\\MIDBASE"
+    except Exception as e:
+        return False, (f"Не удалось перевести папки задачи {task_id} в новый формат "
+                       f"(возможно, база занята refsrv.exe):\n{e}")
+    create_task_shortcuts(folder, os.path.join(product_root, "bin", "win"))
+    return True, (f"Папки старого формата переведены в новый:\n"
+                  f"base_{task_id} → {task_id}\\base, {midbase_note}, созданы ярлыки.")
 
 def find_last_running_task(exe_dir: str) -> tuple[bool, str | None]:
     """Определяет задачу, с базой которой последней работал refsrv из exe_dir (bin/win).

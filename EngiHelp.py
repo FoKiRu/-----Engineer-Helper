@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modules import check_gitignore_status, extract_icon_to_temp, get_short_path_name
 from modules import dialogs
 from modules.dialogs import _center_window, centered_info, centered_warning, centered_error
-from modules.dialogs import centered_askyesno, centered_askchecklist, centered_askchoice
+from modules.dialogs import centered_askyesno, centered_askchecklist, centered_askchoice, centered_askselect
 from modules.data_manager import load_data, save_data, load_settings_and_paths, get_task_data
 from modules.data_manager import save_settings_and_path as _save_recent_path
 from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
@@ -48,12 +48,17 @@ from modules.task_manager import extract_task_id_from_rk7srv_ini, find_product_r
 from modules.task_manager import extract_rk_version_from_path, find_available_rk_versions
 from modules.task_manager import create_task_for_version
 from modules.task_manager import find_running_task_by_ports, find_last_running_task, _main_refsrv_port
-from modules.task_manager import relocate_task
+from modules.task_manager import relocate_task, add_found_task_version, find_task_in_versions, get_missing_versions
+from modules.task_manager import ensure_task_midbase
+from modules.task_manager import find_missing_entries_in_version, move_version_settings
+from modules.task_manager import version_root_from_folder, version_root_from_ini_path
 from modules.version_updater import check_rk_updates, download_version, extract_zip
+from modules.backups import DEFAULT_BACKUPS_KEEP, all_base_paths, find_old_backups, delete_backups
+from modules.backups import format_size
 from modules.changelog import CHANGELOG
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.0.0.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.0.1.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -216,6 +221,9 @@ task_from_version_var = tk.BooleanVar(value=task_from_version_enabled)
 keep_cloud_files_var = tk.BooleanVar(value=keep_cloud_files_enabled)
 # Флаг "Удалять ZIP после распаковки"
 delete_zip_after_extract_var = tk.BooleanVar(value=delete_zip_after_extract_enabled)
+# Флаг "Удалять старые бэкапы базы" и сколько последних бэкапов хранить у каждой задачи
+clean_backups_var = tk.BooleanVar(value=load_data()["settings"].get("clean_backups", False))
+backups_keep_var = tk.IntVar(value=load_data()["settings"].get("backups_keep", DEFAULT_BACKUPS_KEEP))
 INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
 
 # Создаём task_id_var ЗДЕСЬ, до первого использования
@@ -779,38 +787,151 @@ def apply_path_silent():
         INI_FILE_USESQL = os.path.join(ini_path, "rk7srv.INI")
         save_settings_and_path(ini_path)
 
-def _handle_missing_task_folder(task_id, task_info, old_task_id):
-    """Папка задачи не найдена (удалена или перенесена вручную): предлагает указать новый путь,
-    удалить задачу из списка или отменить выбор (тогда возвращается предыдущая задача)."""
-    paths = "\n".join(get_task_base_paths(task_info))
+def _pick_version_with_task(task_id, search_folder, expected_name=None):
+    """Ищет задачу во всех версиях RK внутри search_folder. Одна найденная версия — берёт её;
+    несколько — берёт версию с сохранённым в задаче именем expected_name (INST...), а если такой
+    среди найденных нет — даёт отметить несколько; ни одной — сообщает об этом.
+    Возвращает список корней версий (первая — куда переносится потерянная версия задачи) или None."""
+    root.config(cursor="watch")
+    root.update_idletasks()
+    try:
+        found, checked = find_task_in_versions(search_folder, task_id)
+    finally:
+        root.config(cursor="")
+    if not found:
+        centered_error("Задача не найдена",
+                       f"Задача {task_id} не найдена ни в одной версии RK внутри:\n{search_folder}\n\n"
+                       f"Проверено версий: {checked}. Искались папки {task_id}\\base и base_{task_id}.")
+        return None
+    if len(found) == 1:
+        return [found[0][0]]
+    if expected_name:
+        same_name = [r for r, _ in found if os.path.basename(r).lower() == expected_name.lower()]
+        if len(same_name) == 1:
+            return same_name
+    options = [f"{os.path.relpath(r, search_folder)}" + ("  (старый формат base_" + task_id + ")" if old else "")
+               for r, old in found]
+    indexes = centered_askselect("Выбор версий",
+                                 f"Задача {task_id} найдена в нескольких версиях. Отметьте, в каких она "
+                                 f"должна быть (можно несколько) — каждая станет версией задачи:",
+                                 options, multiple=True)
+    return [found[i][0] for i in indexes] if indexes else None
+
+def _handle_missing_task_folder(task_id, task_info, old_task_id, version_key=None):
+    """Папка задачи (или одной её версии — version_key) не найдена: удалена или перенесена вручную.
+    Предлагает указать новый путь, удалить задачу (версию) из списка или отменить выбор —
+    тогда возвращается предыдущая задача."""
+    versions = task_info.get("versions", {})
+    if version_key:
+        entry = versions.get(version_key, {})
+        missing_paths = [entry.get("base_path", "")]
+        what = f"Папка версии {version_key} задачи {task_id} не найдена"
+        delete_text = "Удалить версию из задачи"
+    else:
+        entry = task_info
+        missing_paths = get_task_base_paths(task_info)
+        what = f"Папка задачи {task_id} не найдена"
+        delete_text = "Удалить из списка"
     choice = centered_askchoice(
         "Папка задачи не найдена",
-        f"Папка задачи {task_id} не найдена — вероятно, удалена или перенесена вручную:\n"
-        f"{paths}\n\nЕсли задачу перенесли в другую версию — укажите папку этой версии (INST...).",
-        ["Указать новый путь", "Удалить из списка", "Отмена"]
+        f"{what} — вероятно, удалена или перенесена вручную:\n"
+        f"{chr(10).join(missing_paths)}\n\nЕсли задачу перенесли — укажите папку с версиями RK, "
+        f"задача будет найдена во всех версиях внутри.",
+        ["Указать новый путь", delete_text, "Отмена"]
     )
     if choice == 0:
-        # Начинаем выбор с папки, где лежат версии (над старым INST...), или ближайшей существующей
-        old_base = get_task_base_paths(task_info)[0] if paths else ""
-        start_dir = os.path.dirname(os.path.dirname(os.path.dirname(old_base))) if old_base else ""
-        while start_dir and not os.path.isdir(start_dir) and os.path.dirname(start_dir) != start_dir:
-            start_dir = os.path.dirname(start_dir)
-        version_folder = filedialog.askdirectory(
-            title=f"Папка версии RK (INST...), в которую перенесена задача {task_id}",
-            initialdir=start_dir or None
-        )
-        if version_folder:
-            ok, message = relocate_task(task_id, version_folder)
-            if ok:
-                print(f"[TASK] {message}")
-                root.after(0, lambda: task_id_var.set(task_id))  # применяем задачу уже по новым путям
-                return
-            centered_error("Не удалось изменить путь", message)
+        if _relocate_missing_task(task_id, entry, version_key):
+            return
     elif choice == 1:
-        root.after(0, lambda: delete_task(confirm=False))
+        if version_key:
+            root.after(0, lambda: _remove_missing_version(task_id, version_key))
+        else:
+            root.after(0, lambda: delete_task(confirm=False))
         return
     # Отмена — возвращаем предыдущую задачу (её настройки применятся заново)
     root.after(0, lambda: task_id_var.set(old_task_id or ""))
+
+def _relocate_missing_task(task_id, entry, version_key):
+    """Выбор папки с версиями, поиск в ней задачи и перенос путей. Если старая версия RK
+    перенесена целиком — предлагает перенести и остальные её задачи. True — задача перенесена
+    и будет применена по новым путям."""
+    # Начинаем выбор с папки, где лежат версии (над старым INST...), или ближайшей существующей
+    old_root = version_root_from_ini_path(entry.get("ini_path", ""))
+    start_dir = os.path.dirname(old_root) if old_root else ""
+    while start_dir and not os.path.isdir(start_dir) and os.path.dirname(start_dir) != start_dir:
+        start_dir = os.path.dirname(start_dir)
+    search_folder = filedialog.askdirectory(
+        title=f"Папка с версиями RK — поиск задачи {task_id} (можно выбрать и саму версию INST...)",
+        initialdir=start_dir or None
+    )
+    # Имя версии (INST...) уже сохранено в задаче — среди найденных берём её без вопроса
+    expected_name = os.path.basename(old_root) if old_root else (f"INST{version_key}" if version_key else None)
+    version_folders = (_pick_version_with_task(task_id, search_folder, expected_name)
+                       if search_folder else None)
+    if not version_folders:
+        return False
+    version_folder = version_folders[0]
+    ok, message, new_key = relocate_task(task_id, version_folder, version_key)
+    if not ok:
+        centered_error("Не удалось изменить путь", message)
+        return False
+    print(f"[TASK] {message}")
+    messages = [message]
+    # Остальные отмеченные версии, где тоже есть папка задачи, — добавляем задаче как её версии
+    for extra_folder in version_folders[1:]:
+        extra_ok, extra_msg = add_found_task_version(task_id, extra_folder)
+        print(f"[TASK] {extra_msg}")
+        messages.append(extra_msg if extra_ok else f"{os.path.basename(extra_folder)}: {extra_msg}")
+
+    # Остальные задачи, которые указывают на ту же старую версию и тоже потеряли папки
+    new_root = version_root_from_folder(version_folder)
+    others = [(t, k) for t, k in find_missing_entries_in_version(old_root) if t != task_id] if old_root else []
+    if others:
+        names = "\n".join(f"• {t}" + (f" (версия {k})" if k else "") for t, k in others)
+        if centered_askyesno("Перенос версии",
+                             f"В версии {old_root} есть ещё задачи без папок:\n{names}\n\n"
+                             f"Перенести их пути тоже в {new_root}?"):
+            for other_id, other_key in others:
+                other_ok, other_msg, _ = relocate_task(other_id, new_root, other_key)
+                print(f"[TASK] {other_msg}")
+                messages.append(other_msg if other_ok else f"Задача {other_id}: {other_msg}")
+    # Сама версия RK перенесена — переводим её дефолтные настройки и путь в истории
+    if old_root and not os.path.isdir(old_root) and new_root and move_version_settings(old_root, new_root):
+        if 'path_entry' in globals():
+            path_entry['values'] = load_data()["settings"].get("recent_paths", [])
+        messages.append(f"Настройки версии без задачи и история путей переведены на {new_root}")
+
+    centered_info("Путь задачи изменён", "\n\n".join(messages))
+    task_id_combobox['values'] = load_task_ids()
+
+    # Применяем задачу уже по новым путям (нужная версия — без повторного выбора)
+    def _apply():
+        global _forced_version
+        _forced_version = new_key
+        task_id_var.set(task_id)
+    root.after(0, _apply)
+    return True
+
+def _remove_missing_version(task_id, version_key):
+    """Убирает из задачи версию, папки которой нет на диске (папки не удаляются — их уже нет).
+    Если это была активная версия — активной становится другая. Затем задача выбирается заново."""
+    data = load_data()
+    task_info = data.get("tasks", {}).get(task_id)
+    if not task_info or version_key not in task_info.get("versions", {}):
+        return
+    versions = task_info["versions"]
+    removed = versions.pop(version_key)
+    if os.path.normpath(removed.get("ini_path", "")).lower() == os.path.normpath(task_info.get("ini_path", "")).lower():
+        # Активной делаем версию, папка которой есть на диске
+        missing = set(get_missing_versions(task_info))
+        new_active = next((k for k in versions if k not in missing), next(iter(versions), None))
+        if new_active:
+            for field in ("ini_path", "base_path", "midbase_path", "ini_settings"):
+                if field in versions[new_active]:
+                    task_info[field] = versions[new_active][field]
+    save_data(data)
+    print(f"[TASK] Версия {version_key} убрана из задачи {task_id}")
+    task_id_var.set(task_id)
 
 def on_task_selected(event):
     global _prev_task_id, _forced_version
@@ -835,6 +956,9 @@ def on_task_selected(event):
         _prev_task_id = ""
         return
 
+    # Нет папки MIDBASE (например, после переноса задачи) — создаём и записываем путь
+    ensure_task_midbase(selected_task_id)
+    clean_backups_in_background([selected_task_id])
     data = load_data()
     tasks = data.get("tasks", {})
 
@@ -856,6 +980,10 @@ def on_task_selected(event):
         # Версия уже выбрана пользователем на предыдущем шаге — применяем её
         # без повторного диалога (иначе: выбрали версию -> задачу -> опять версию).
         if forced_version and forced_version in versions:
+            if forced_version in get_missing_versions(task_info):
+                _prev_task_id = ""  # в версию без папок ничего не пишем
+                _handle_missing_task_folder(selected_task_id, task_info, old_task_id, forced_version)
+                return
             _prev_task_id = selected_task_id
             apply_task_version(selected_task_id, forced_version)
             return
@@ -893,8 +1021,7 @@ def on_task_selected(event):
     ini_path_from_task = task_info["ini_path"]
 
     rk7srv_ini_path = os.path.join(ini_path_from_task, "rk7srv.INI")
-    if not os.path.exists(rk7srv_ini_path):
-        centered_error("Ошибка", f"Файл rk7srv.INI не найден:\n{rk7srv_ini_path}")
+    if not ensure_ini_files(ini_path_from_task):
         return
 
     # Применяем UseDBSync
@@ -916,9 +1043,7 @@ def on_task_selected(event):
         save_wincash_params()
 
     # Применяем REFSERVER
-    if "REFSERVER" in ini_settings:
-        refserver_var.set(ini_settings["REFSERVER"])
-        save_refserver_params()
+    _apply_task_refserver(ini_path_from_task, ini_settings)
 
     # Применяем Port
     _apply_task_port(ini_path_from_task, ini_settings)
@@ -1461,6 +1586,7 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
 
     version_list = list(reversed(sorted(versions.keys())))
     current_ver = extract_rk_version_from_path(task_info.get("ini_path", ""))
+    missing_versions = set(get_missing_versions(task_info))
 
     select_win.transient(root)
     select_win.grab_set()
@@ -1489,6 +1615,8 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
         label_text = ver
         if ver == current_ver:
             label_text += "  ◀ текущая"
+        if ver in missing_versions:
+            label_text += "  — папка не найдена"
 
         ver_row = tk.Frame(radio_frame)
         ver_row.pack(anchor="w", pady=2, fill="x")
@@ -1499,6 +1627,7 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
             variable=version_var_local,
             value=ver,
             anchor="w",
+            fg="red3" if ver in missing_versions else None,
             font=("TkDefaultFont", 9, "bold" if ver == current_ver else "normal")
         )
         rb.pack(side="left")
@@ -1516,6 +1645,12 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
             apply_network_ids_silent_for_task(prev_task_id)
             apply_ini_flags_silent_for_task(prev_task_id)
         global _prev_task_id
+        if selected_ver in missing_versions:
+            # Папки версии нет — предлагаем указать новый путь или убрать версию
+            _prev_task_id = ""
+            select_win.destroy()
+            _handle_missing_task_folder(task_id, task_info, prev_task_id, selected_ver)
+            return
         _prev_task_id = task_id
         select_win.destroy()
         apply_task_version(task_id, selected_ver)
@@ -1536,6 +1671,7 @@ def show_version_selection_dialog(task_id, task_info, versions, prev_task_id):
 
 def apply_task_version(task_id, selected_version):
     """Применяет настройки конкретной версии для задачи."""
+    ensure_task_midbase(task_id)
     data = load_data()
     tasks = data.get("tasks", {})
     task_info = tasks.get(task_id)
@@ -1571,6 +1707,8 @@ def apply_task_version(task_id, selected_version):
     ini_settings = version_info.get("ini_settings", {})
     ini_path_from_version = version_info["ini_path"]
     rk7srv_ini_path = os.path.join(ini_path_from_version, "rk7srv.INI")
+    if not ensure_ini_files(ini_path_from_version):
+        return
 
     if "UseDBSync" in ini_settings:
         for filename, value in ini_settings["UseDBSync"].items():
@@ -1587,9 +1725,7 @@ def apply_task_version(task_id, selected_version):
         server_var.set(ini_settings["Server"])
         save_wincash_params()
 
-    if "REFSERVER" in ini_settings:
-        refserver_var.set(ini_settings["REFSERVER"])
-        save_refserver_params()
+    _apply_task_refserver(ini_path_from_version, ini_settings)
 
     _apply_task_port(ini_path_from_version, ini_settings)
 
@@ -1918,7 +2054,8 @@ _task_panel_state = None  # (задачи, задачи версии, выбра
 def refresh_task_panel():
     """Список задач на панели слева в том же порядке, что в «Номер задачи».
     Задачи текущей версии — обычным цветом, остальных версий — серым,
-    задачи, папки которых не найдены на диске, — красным; выбранная выделена."""
+    задачи, папки которых не найдены на диске, — красным, задачи, у которых нет папок
+    только части версий, — оранжевым; выбранная выделена."""
     global _task_panel_state
     if not show_task_panel_var.get():
         return
@@ -1926,8 +2063,11 @@ def refresh_task_panel():
     version_tasks = set(find_tasks_for_path(ini_path)) if ini_path else set()
     all_tasks = load_data().get("tasks", {})
     missing_tasks = {t for t in tasks if t in all_tasks and not task_folder_exists(all_tasks[t])}
+    partly_missing = {t for t in tasks if t in all_tasks and t not in missing_tasks
+                      and get_missing_versions(all_tasks[t])}
     selected = task_id_var.get().strip()
-    state = (tuple(tasks), frozenset(version_tasks), frozenset(missing_tasks), selected)
+    state = (tuple(tasks), frozenset(version_tasks), frozenset(missing_tasks),
+             frozenset(partly_missing), selected)
     if state == _task_panel_state:
         return
     _task_panel_state = state
@@ -1937,6 +2077,8 @@ def refresh_task_panel():
         task_listbox.insert("end", task)
         if task in missing_tasks:
             task_listbox.itemconfig(i, foreground="red3")  # папка задачи удалена
+        elif task in partly_missing:
+            task_listbox.itemconfig(i, foreground="dark orange")  # нет папок у части версий
         elif task not in version_tasks:
             task_listbox.itemconfig(i, foreground="gray55")
     if selected in tasks:
@@ -2050,9 +2192,7 @@ def apply_default_ini_settings(ini_path_val=None):
         server_var.set(ini_settings["Server"])
         save_wincash_params()
     # Применяем REFSERVER
-    if "REFSERVER" in ini_settings:
-        refserver_var.set(ini_settings["REFSERVER"])
-        save_refserver_params()
+    _apply_task_refserver(ini_path_val, ini_settings)
     # Применяем Port
     _apply_task_port(ini_path_val, ini_settings)
     on_check()
@@ -3687,6 +3827,17 @@ def load_refserver_params(ini_path_val=None):
     except Exception:
         pass
 
+def _apply_task_refserver(ini_path_val, ini_settings):
+    """Применяет REFSERVER из настроек задачи. Если в задаче имя не сохранено (пусто) —
+    поле показывает имя из rk7srv.INI, а при смене задачи оно сохранится в задачу."""
+    refserver_value = (ini_settings.get("REFSERVER") or "").strip()
+    if refserver_value:
+        refserver_var.set(refserver_value)
+        save_refserver_params()
+    else:
+        refserver_var.set("")
+        load_refserver_params(ini_path_val)
+
 def save_refserver_params():
     """Сохраняет REFSERVER в rk7srv.INI, RKEEPER.INI и rk7man.ini."""
     ref_value = refserver_var.get().strip()
@@ -4046,8 +4197,8 @@ refserver_var.trace_add("write", lambda *args: save_refserver_params())
 load_wincash_params()
 load_refserver_params()
 
-def copy_missing_ini_files():
-    bin_win_path = ini_path
+def _copy_missing_ini_files(bin_win_path):
+    """Копирует недостающие INI-файлы из bin\\win\\ini в bin\\win. Возвращает (missing, copied)."""
     bin_win_ini = os.path.join(bin_win_path, "ini")
     missing = [f for f in FILES if not os.path.isfile(os.path.join(bin_win_path, f))]
     copied = []
@@ -4060,6 +4211,26 @@ def copy_missing_ini_files():
                 copied.append(f)
             except Exception as e:
                 centered_error("Ошибка", f"Не удалось скопировать {f}:\n{e}")
+    return missing, copied
+
+def ensure_ini_files(bin_win_path):
+    """Перед применением задачи: если в версии нет INI-файлов — предлагает добавить их
+    из bin\\win\\ini. True — rk7srv.INI на месте и задачу можно применять."""
+    missing = [f for f in FILES if not os.path.isfile(os.path.join(bin_win_path, f))]
+    if not missing:
+        return True
+    if centered_askyesno("Нет INI-файлов",
+                         f"В версии нет файлов: {', '.join(missing)}\n{bin_win_path}\n\n"
+                         f"Добавить из папки bin\\win\\ini и продолжить?"):
+        _, copied = _copy_missing_ini_files(bin_win_path)
+        print(f"[INI] Скопированы из bin\\win\\ini: {', '.join(copied) or 'ничего'}")
+    if os.path.isfile(os.path.join(bin_win_path, "rk7srv.INI")):
+        return True
+    centered_error("Ошибка", f"Файл rk7srv.INI не найден:\n{os.path.join(bin_win_path, 'rk7srv.INI')}")
+    return False
+
+def copy_missing_ini_files():
+    missing, copied = _copy_missing_ini_files(ini_path)
     if copied:
         centered_info("Файлы скопированы", f"Скопированы из bin\\win\\ini:\n{', '.join(copied)}")
     elif not missing:
@@ -4202,6 +4373,8 @@ def save_prefs_flags(*_):
     data["settings"]["keep_cloud_files"] = keep_cloud_files_var.get()
     data["settings"]["delete_zip_after_extract"] = delete_zip_after_extract_var.get()
     data["settings"]["show_task_panel"] = show_task_panel_var.get()
+    data["settings"]["clean_backups"] = clean_backups_var.get()
+    data["settings"]["backups_keep"] = get_backups_keep()
     save_data(data)
 
 tk.Checkbutton(
@@ -4285,6 +4458,95 @@ task_panel_desc_label = tk.Label(
 )
 task_panel_desc_label.pack(padx=(30, 10), pady=(0, 10), anchor="w", fill="x")
 
+# --- Старые бэкапы базы ---
+def get_backups_keep():
+    """Сколько последних бэкапов хранить (в поле могли ввести не число — тогда по умолчанию)."""
+    try:
+        return max(1, int(backups_keep_var.get()))
+    except (tk.TclError, ValueError):
+        return DEFAULT_BACKUPS_KEEP
+
+def clean_backups_now(confirm=True):
+    """Удаляет у всех задач бэкапы базы сверх последних N. С подтверждением — показывает,
+    сколько будет удалено. Возвращает False, если пользователь отказался."""
+    keep = get_backups_keep()
+    root.config(cursor="watch")
+    root.update_idletasks()
+    try:
+        old = find_old_backups(all_base_paths(), keep)
+    finally:
+        root.config(cursor="")
+    if not old:
+        if confirm:
+            centered_info("Бэкапы базы", f"Лишних бэкапов нет — у каждой задачи не больше {keep}.")
+        return True
+    size = sum(s for _, s in old)
+    if confirm and not centered_askyesno(
+            "Удалить старые бэкапы?",
+            f"У задач будет удалено старых бэкапов базы: {len(old)} ({format_size(size)}).\n"
+            f"У каждой задачи останутся {keep} последних.",
+            details="\n".join(p for p, _ in old), details_label="Список бэкапов"):
+        return False
+    root.config(cursor="watch")
+    root.update_idletasks()
+    try:
+        deleted, freed, errors = delete_backups(old)
+    finally:
+        root.config(cursor="")
+    print(f"[BACKUPS] Удалено {deleted} бэкапов, освобождено {format_size(freed)}")
+    if confirm:
+        message = f"Удалено бэкапов: {deleted}, освобождено {format_size(freed)}."
+        if errors:
+            message += "\n\nНе удалось удалить (возможно, файлы заняты refsrv):\n" + "\n".join(errors[:10])
+        centered_info("Бэкапы базы", message)
+    return True
+
+def clean_backups_in_background(task_ids=None):
+    """Тихая очистка в фоне — при запуске программы и при выборе задачи."""
+    if not clean_backups_var.get():
+        return
+    keep = get_backups_keep()
+    base_paths = all_base_paths(task_ids)  # JSON читаем здесь, а не в потоке
+
+    def run():
+        deleted, freed, errors = delete_backups(find_old_backups(base_paths, keep))
+        if deleted or errors:
+            print(f"[BACKUPS] Удалено {deleted} старых бэкапов ({format_size(freed)}), ошибок: {len(errors)}")
+    threading.Thread(target=run, daemon=True).start()
+
+def toggle_clean_backups():
+    # При включении сразу показываем, что будет удалено; отказались — флаг снимается
+    if clean_backups_var.get() and not clean_backups_now():
+        clean_backups_var.set(False)
+    save_prefs_flags()
+
+tk.Checkbutton(
+    prefs_tab,
+    text="Удалять старые бэкапы базы",
+    variable=clean_backups_var,
+    command=toggle_clean_backups
+).pack(padx=10, pady=(5, 2), anchor="w")
+
+backups_keep_frame = tk.Frame(prefs_tab)
+backups_keep_frame.pack(padx=(30, 10), pady=(0, 2), anchor="w")
+tk.Label(backups_keep_frame, text="Хранить последних:").pack(side="left")
+tk.Spinbox(backups_keep_frame, from_=1, to=100, width=4,
+           textvariable=backups_keep_var).pack(side="left", padx=(5, 10))
+backups_keep_var.trace_add("write", lambda *_: save_prefs_flags())
+tk.Button(backups_keep_frame, text="Очистить сейчас", command=clean_backups_now).pack(side="left")
+
+backups_desc_label = tk.Label(
+    prefs_tab,
+    text=("Бэкапы refsrv в папке base\\backups\\databases каждой задачи. "
+          "Лишние старые удаляются при запуске программы и при выборе задачи."),
+    justify="left",
+    fg="gray40",
+    font=("TkDefaultFont", 8),
+    wraplength=350,
+    anchor="w"
+)
+backups_desc_label.pack(padx=(30, 10), pady=(0, 10), anchor="w", fill="x")
+
 # ======================= Вкладка "Что нового" =======================
 changelog_tab = tk.Frame(notebook)
 notebook.add(changelog_tab, text="Что нового")
@@ -4348,6 +4610,9 @@ root.after(1000, update_every_1_seconds)
 # Проверка автообновления при старте
 if auto_update_var.get():
     root.after(1000, lambda: check_for_updates(silent=True))
+
+# Очистка старых бэкапов базы у всех задач (если включена в настройках)
+root.after(3000, clean_backups_in_background)
 
 # === Инициализация глобальных горячих клавиш ===
 root.protocol("WM_DELETE_WINDOW", on_closing)

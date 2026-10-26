@@ -146,6 +146,43 @@ def centered_askchoice(title, message, options, details=None, details_label="П�
     Возвращает индекс выбранного варианта или None, если окно закрыто крестиком."""
     return _ask_choice(title, message, options, details, details_label)
 
+def centered_askselect(title, message, options, multiple=False):
+    """Окно со списком вариантов и кнопками «Выбрать» / «Отмена».
+    Обычно выбирается один вариант (двойной клик по строке — выбор) и возвращается его индекс.
+    multiple=True — клик отмечает/снимает строку, сразу отмечены все; возвращается список индексов.
+    None — пользователь отказался."""
+    win, frame = _create_dialog(title, message)
+    result = [None]
+
+    listbox = tk.Listbox(frame, activestyle="none", exportselection=False,
+                         selectmode="multiple" if multiple else "browse",
+                         height=min(len(options), 10), width=max(len(o) for o in options) + 2)
+    for option in options:
+        listbox.insert("end", option)
+    listbox.selection_set(0, "end" if multiple else 0)
+    listbox.pack(fill="x", padx=15, pady=(0, 10))
+
+    def choose(event=None):
+        selection = listbox.curselection()
+        if selection:
+            result[0] = list(selection) if multiple else selection[0]
+            win.destroy()
+
+    if not multiple:
+        listbox.bind("<Double-Button-1>", choose)
+
+    btn_frame = tk.Frame(frame)
+    btn_frame.pack(pady=(0, 15))
+    tk.Button(btn_frame, text="Выбрать", command=choose, width=10).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Отмена", command=win.destroy, width=10).pack(side="left", padx=5)
+
+    _center_window(win, max_width=CHECKLIST_WINDOW_MAX_WIDTH)
+
+    win.focus_force()
+    win.deiconify()
+    win.wait_window()
+    return result[0]
+
 def centered_askchecklist(title, entries, question, details=None, details_label="Подробнее"):
     """Окно со списком флажков и кнопками Да/Нет.
     entries — список (text, checkable): checkable=True — флажок (по умолчанию отмечен),
