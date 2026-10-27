@@ -17,6 +17,7 @@ import tempfile
 import webbrowser
 import keyboard
 import queue
+import json
 import ctypes
 import ctypes.wintypes
 from packaging import version
@@ -29,6 +30,7 @@ from modules import check_gitignore_status, extract_icon_to_temp, get_short_path
 from modules import dialogs
 from modules.dialogs import _center_window, centered_info, centered_warning, centered_error
 from modules.dialogs import centered_askyesno, centered_askchecklist, centered_askchoice, centered_askselect
+from modules.dialogs import centered_asklogin
 from modules.data_manager import load_data, save_data, load_settings_and_paths, get_task_data
 from modules.data_manager import save_settings_and_path as _save_recent_path
 from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
@@ -55,10 +57,16 @@ from modules.task_manager import version_root_from_folder, version_root_from_ini
 from modules.version_updater import check_rk_updates, download_version, extract_zip
 from modules.backups import DEFAULT_BACKUPS_KEEP, all_base_paths, find_old_backups, delete_backups
 from modules.backups import format_size
+from modules.udb_api import UtilsApi, ApiError as UdbApiError, DEFAULT_URL as UDB_DEFAULT_URL
+from modules.udb_api import DEFAULT_PARAMS as UDB_DEFAULT_PARAMS, OPERATIONS as UDB_OPERATIONS
+from modules.udb_api import OPERATION_TITLES as UDB_OPERATION_TITLES, VERSION_RE as UDB_VERSION_RE
+from modules.udb_api import default_operations as udb_default_operations, rk_version_from_ini_path
+from modules.udb_api import load_credential, save_credential, remove_credential, api_host
+from modules.udb_api import result_file as udb_result_file
 from modules.changelog import CHANGELOG
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.0.1.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.1.2.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Автор: Кирилл Рутенко"
 EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = (
@@ -4361,6 +4369,334 @@ def check_for_updates(silent=False):
         if not silent:
             centered_error("Ошибка", f"Не удалось обновить:\n{e}")
 
+# ======================= Вкладка "База" =======================
+# Подготовка rk7.udb выбранной задачи через API utils.ucs.ru: сброс дилера, AddDealerFromRal,
+# код предприятия, отключение проверки лицензии обновления, деактивация ресторанов.
+udb_tab = tk.Frame(notebook)
+notebook.add(udb_tab, text="База")
+
+def _udb_settings():
+    """Настройки вкладки «База» из JSON (адрес API и значения параметров)."""
+    saved = load_data()["settings"].get("udb_api", {})
+    return {"url": saved.get("url") or UDB_DEFAULT_URL,
+            **{k: saved.get(k, v) for k, v in UDB_DEFAULT_PARAMS.items()}}
+
+_udb_saved = _udb_settings()
+udb_op_vars = {op: tk.BooleanVar(value=True) for op, _ in UDB_OPERATIONS}
+udb_param_vars = {
+    "newdealercode": tk.StringVar(value=_udb_saved["newdealercode"]),
+    "newenterprisecode": tk.StringVar(value=_udb_saved["newenterprisecode"]),
+    "newrk7version": tk.StringVar(),
+    "newrefsdataversion": tk.StringVar(value=_udb_saved["newrefsdataversion"]),
+    "restcode": tk.StringVar(value=_udb_saved["restcode"]),
+}
+_udb_state = {"key": None, "busy": False}
+
+def _udb_current():
+    """(задача, путь к rk7.udb, версия R-Keeper) выбранной задачи; путь None — задачи нет."""
+    task_id = task_id_var.get().strip()
+    task_info = get_task_data(task_id) if task_id else None
+    if not task_info or not task_info.get("base_path"):
+        return task_id, None, rk_version_from_ini_path(ini_path)
+    udb_path = os.path.normpath(os.path.join(task_info["base_path"], "rk7.udb"))
+    return task_id, udb_path, rk_version_from_ini_path(task_info.get("ini_path") or ini_path)
+
+def refresh_udb_tab(force=False):
+    """Обновляет сведения о базе задачи. При смене задачи или версии подставляет версию R-Keeper
+    и отмечает операции, нужные для этой версии."""
+    task_id, udb_path, rk_version = _udb_current()
+    if udb_path and os.path.isfile(udb_path):
+        stat = os.stat(udb_path)
+        udb_file_label.config(
+            text=f"{udb_path}\n{format_size(stat.st_size)}, изменён "
+                 f"{datetime.fromtimestamp(stat.st_mtime).strftime('%d.%m.%Y %H:%M')}", fg="black")
+    elif udb_path:
+        udb_file_label.config(text=f"{udb_path}\nфайл не найден", fg="red3")
+    else:
+        udb_file_label.config(text="Задача не выбрана", fg="gray40")
+    udb_task_label.config(text=f"Задача: {task_id or '—'}    Версия R-Keeper: {rk_version or '—'}")
+
+    key = (task_id, udb_path, rk_version)
+    if force or key != _udb_state["key"]:
+        _udb_state["key"] = key
+        udb_param_vars["newrk7version"].set(rk_version)
+        needed = set(udb_default_operations(rk_version))
+        for op, var in udb_op_vars.items():
+            var.set(op in needed)
+    login = (load_credential(api_host(_udb_settings()["url"])) or ("",))[0]
+    udb_account_label.config(text=f"Учётная запись utils.ucs.ru: {login or 'вход не выполнен'}")
+    udb_account_btn.config(text="Выйти" if login else "Войти")
+
+def udb_log(text, tag=None):
+    """Строка в журнал вкладки (можно вызывать из фонового потока)."""
+    def _append():
+        udb_log_text.config(state="normal")
+        udb_log_text.insert("end", text + "\n", tag or ())
+        udb_log_text.see("end")
+        udb_log_text.config(state="disabled")
+    root.after(0, _append)
+
+def udb_progress(done, total, label):
+    """Прогресс загрузки/скачивания (из фонового потока). total=0 — неизвестен."""
+    def _update():
+        if total:
+            udb_progressbar.stop()
+            udb_progressbar.config(mode="determinate", maximum=total, value=done)
+            udb_status_label.config(text=f"{label}: {format_size(done)} из {format_size(total)}")
+        else:
+            udb_progressbar.config(mode="indeterminate")
+            udb_progressbar.start(15)
+            udb_status_label.config(text=label)
+    root.after(0, _update)
+
+def _udb_ask_login(message="Логин и пароль utils.ucs.ru (как для входа на сайт)."):
+    host = api_host(_udb_settings()["url"])
+    current = load_credential(host)
+    return centered_asklogin("Вход utils.ucs.ru", message, current[0] if current else "")
+
+def udb_account_action():
+    """Кнопка учётной записи: «Выйти», если вход выполнен, иначе «Войти»."""
+    if _udb_state["busy"]:
+        return
+    host = api_host(_udb_settings()["url"])
+    current = load_credential(host)
+    if not current:
+        udb_change_account()
+        return
+    if centered_askyesno("Выход utils.ucs.ru",
+                         f"Выйти из учётной записи {current[0]}?"):
+        remove_credential(host)
+        udb_log(f"Выход из учётной записи {current[0]}")
+        refresh_udb_tab()
+
+def udb_change_account():
+    """Ввод логина и пароля; сохраняются после проверки входа на сайт."""
+    if _udb_state["busy"]:
+        return
+    cred = _udb_ask_login()
+    if not cred:
+        return
+    settings = _udb_settings()
+
+    def job():
+        try:
+            info = UtilsApi(settings["url"], *cred).operations()
+        except UdbApiError as e:
+            udb_log(f"Вход не выполнен: {e}", "error")
+            return
+        except requests.RequestException as e:
+            udb_log(f"Сайт недоступен: {e}", "error")
+            return
+        save_credential(api_host(settings["url"]), *cred)
+        user = info.get("user", {})
+        udb_log(f"Вход выполнен: {user.get('login', cred[0])}"
+                + (" (сотрудник UCS)" if user.get("ucsStaff") else ""), "ok")
+        root.after(0, refresh_udb_tab)
+    _udb_run(job, "Проверка входа")
+
+def _udb_run(job, label):
+    """Выполняет job в фоне; на это время кнопки вкладки неактивны."""
+    _udb_state["busy"] = True
+    udb_process_btn.config(state="disabled")
+    udb_account_btn.config(state="disabled")
+    udb_progress(0, 0, label)
+
+    def run():
+        try:
+            job()
+        except Exception as e:
+            udb_log(f"Ошибка: {e}", "error")
+        finally:
+            def _done():
+                _udb_state["busy"] = False
+                udb_process_btn.config(state="normal")
+                udb_account_btn.config(state="normal")
+                udb_progressbar.stop()
+                udb_progressbar.config(mode="determinate", value=0)
+                udb_status_label.config(text="")
+                refresh_udb_tab()
+            root.after(0, _done)
+    threading.Thread(target=run, daemon=True).start()
+
+def _udb_release_file(task_id, udb_path):
+    """rk7.udb занят refsrv — предлагает закрыть refsrv этой задачи. True — файл свободен."""
+    def _locked():
+        try:
+            with open(udb_path, "r+b"):
+                return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+
+    exe_dir = os.path.normpath(ini_path).lower()
+    procs = [p for p, d in get_process_by_name('refsrv.exe') if d == exe_dir and _is_same_refsrv(p, d)]
+    if not procs and not _locked():
+        return True
+    if not centered_askyesno("rk7.udb занят",
+                             f"База задачи {task_id} открыта в refsrv:\n{udb_path}\n\n"
+                             f"Закрыть refsrv этой задачи и продолжить?"):
+        return False
+    alive = _kill_and_wait(procs)
+    if alive or _locked():
+        centered_error("rk7.udb занят", "Не удалось освободить rk7.udb — закройте refsrv вручную.")
+        return False
+    return True
+
+def udb_process():
+    """Отправляет rk7.udb выбранной задачи на utils.ucs.ru, выполняет отмеченные операции,
+    скачивает результат на место исходного файла (исходный — в rk7.udb.before_api)
+    и удаляет копию базы с сервера."""
+    if _udb_state["busy"]:
+        return
+    task_id, udb_path, _ = _udb_current()
+    if not udb_path:
+        centered_warning("База", "Сначала выберите задачу.")
+        return
+    if not os.path.isfile(udb_path):
+        centered_error("База", f"Файл не найден:\n{udb_path}")
+        return
+    ops = [op for op, _ in UDB_OPERATIONS if udb_op_vars[op].get()]
+    if not ops:
+        centered_warning("База", "Отметьте хотя бы одну операцию.")
+        return
+    params = {k: v.get().strip() for k, v in udb_param_vars.items()}
+    version = params["newrk7version"]
+    if "disablelicensecheck" in ops:
+        if not UDB_VERSION_RE.match(version):
+            centered_error("База", "Укажите версию R-Keeper вида 7.N.N.N (например, 7.26.04.2002).")
+            return
+        if int(version.split(".")[1]) >= 25 and not (params["restcode"] and params["newenterprisecode"]):
+            centered_error("База", "Для 7.25 и новее нужны код предприятия и код ресторана.")
+            return
+
+    # Значения параметров запоминаются для следующих задач (версия — у каждой своя)
+    data = load_data()
+    udb_settings = data["settings"].setdefault("udb_api", {})
+    udb_settings.update({k: params[k] for k in UDB_DEFAULT_PARAMS})
+    save_data(data)
+
+    if not _udb_release_file(task_id, udb_path):
+        return
+    settings = _udb_settings()
+    host = api_host(settings["url"])
+    cred = load_credential(host) or _udb_ask_login()
+    if not cred:
+        return
+    titles = "\n".join(f"• {UDB_OPERATION_TITLES[op]}" for op in ops)
+    if not centered_askyesno(
+            "Подготовка базы",
+            f"Отправить rk7.udb задачи {task_id} ({format_size(os.path.getsize(udb_path))}) на {host} "
+            f"и выполнить:\n{titles}\n\nИсходный файл сохранится как rk7.udb.before_api."):
+        return
+
+    def job():
+        api = UtilsApi(settings["url"], *cred)
+        backup = udb_path + ".before_api"
+        shutil.copy2(udb_path, backup)
+        udb_log(f"— Задача {task_id}: {', '.join(ops)}")
+        try:
+            result = api.process(udb_path, ops, params,
+                                 lambda d, t: udb_progress(d, t, "Загрузка") if d < t
+                                 else udb_progress(0, 0, "Выполнение операций на сервере…"))
+        except UdbApiError as e:
+            if e.status == 401:
+                remove_credential(host)
+                udb_log("Неверный логин или пароль — сохранённые данные удалены, нажмите «Войти»", "error")
+            else:
+                udb_log(f"Ошибка: {e}", "error")
+            return
+        save_credential(host, *cred)
+        file_id, download = udb_result_file(result)
+        try:
+            for r in result.get("results", []):
+                udb_log(f"[{'OK' if r.get('ok') else 'ERR'}] {UDB_OPERATION_TITLES.get(r.get('op'), r.get('op'))}"
+                        + (f": {r['error']}" if r.get("error") else ""), "ok" if r.get("ok") else "error")
+            before, after = result.get("ownerBefore") or {}, result.get("ownerAfter") or {}
+            udb_log(f"Предприятие {before.get('enterpriseCode')} → {after.get('enterpriseCode')}, "
+                    f"дилер {before.get('dealerCode')} → {after.get('dealerCode')}")
+            if result.get("params"):
+                udb_log("Параметры: " + ", ".join(f"{k}={v}" for k, v in result["params"].items()), "gray")
+            if not result.get("succeeded"):
+                udb_log("Операции завершились с ошибками — rk7.udb не заменён", "error")
+                return
+            if not download:
+                # Ответ сервера сохраняем рядом с базой — по нему видно, в каком поле ссылка на файл
+                response_file = udb_path + ".api_response.json"
+                with open(response_file, "w", encoding="utf-8") as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+                udb_log(f"В ответе сервера нет ссылки на подготовленный файл (поля: "
+                        f"{', '.join(result)}) — rk7.udb не заменён. Ответ: {response_file}", "error")
+                return
+            prepared = udb_path + ".prepared"
+            api.download(download, prepared, lambda d, t: udb_progress(d, t, "Скачивание"))
+            try:
+                os.replace(prepared, udb_path)
+            except OSError as e:
+                udb_log(f"Не удалось заменить rk7.udb ({e}). Подготовленная база: {prepared}", "error")
+                return
+            udb_log(f"rk7.udb подготовлен. Исходный файл: {backup}", "ok")
+        finally:
+            # Копия клиентской базы не должна оставаться на сервере
+            if not file_id:
+                udb_log("Копия базы осталась на сервере (в ответе нет id папки) — удалите её на сайте "
+                        "или она удалится автоматически через 2 дня", "error")
+            else:
+                try:
+                    api.delete(file_id)
+                except Exception as e:
+                    udb_log(f"Не удалось удалить файл на сервере ({file_id}): {e}", "error")
+    _udb_run(job, "Загрузка")
+
+tk.Label(udb_tab, text="Подготовка rk7.udb для стенда через utils.ucs.ru",
+         font=("TkDefaultFont", 9, "bold")).pack(padx=10, pady=(8, 2), anchor="w")
+udb_task_label = tk.Label(udb_tab, anchor="w", justify="left")
+udb_task_label.pack(padx=10, anchor="w")
+udb_file_label = tk.Label(udb_tab, anchor="w", justify="left", font=("TkDefaultFont", 8), wraplength=390)
+udb_file_label.pack(padx=10, anchor="w")
+
+udb_account_frame = tk.Frame(udb_tab)
+udb_account_frame.pack(padx=10, pady=(4, 0), fill="x")
+udb_account_label = tk.Label(udb_account_frame, anchor="w")
+udb_account_label.pack(side="left")
+udb_account_btn = tk.Button(udb_account_frame, text="Войти", command=udb_account_action)
+udb_account_btn.pack(side="right")
+
+udb_ops_frame = tk.LabelFrame(udb_tab, text="Операции")
+udb_ops_frame.pack(padx=10, pady=(4, 0), fill="x")
+for op, title in UDB_OPERATIONS:
+    tk.Checkbutton(udb_ops_frame, text=title, variable=udb_op_vars[op]).pack(anchor="w", padx=4)
+
+udb_params_frame = tk.LabelFrame(udb_tab, text="Параметры")
+udb_params_frame.pack(padx=10, pady=(4, 0), fill="x")
+for i, (key, label, width) in enumerate([
+        ("newdealercode", "Код дилера", 10), ("newenterprisecode", "Код предприятия", 10),
+        ("newrk7version", "Версия R-Keeper", 14), ("restcode", "Код ресторана", 10),
+        ("newrefsdataversion", "Версия refsdata", 14)]):
+    row, col = divmod(i, 2)
+    tk.Label(udb_params_frame, text=label + ":").grid(row=row, column=col * 2, sticky="w", padx=(4, 2), pady=1)
+    tk.Entry(udb_params_frame, textvariable=udb_param_vars[key], width=width).grid(
+        row=row, column=col * 2 + 1, sticky="w", padx=(0, 6), pady=1)
+
+udb_action_frame = tk.Frame(udb_tab)
+udb_action_frame.pack(padx=10, pady=(6, 0), fill="x")
+udb_process_btn = tk.Button(udb_action_frame, text="Подготовить базу", command=udb_process)
+udb_process_btn.pack(side="left")
+udb_progressbar = ttk.Progressbar(udb_action_frame, length=200)
+udb_progressbar.pack(side="left", padx=(10, 0), fill="x", expand=True)
+udb_status_label = tk.Label(udb_tab, anchor="w", fg="gray40", font=("TkDefaultFont", 8))
+udb_status_label.pack(padx=10, anchor="w")
+
+udb_log_text = tk.Text(udb_tab, height=3, wrap="word", font=("TkDefaultFont", 8), state="disabled",
+                       relief="solid", borderwidth=1)
+udb_log_text.pack(padx=10, pady=(0, 8), fill="both", expand=True)
+udb_log_text.tag_configure("ok", foreground="green4")
+udb_log_text.tag_configure("error", foreground="red3")
+udb_log_text.tag_configure("gray", foreground="gray40")
+
+notebook.bind("<<NotebookTabChanged>>",
+              lambda e: refresh_udb_tab() if notebook.select() == str(udb_tab) else None, add="+")
+
 # ======================= Вкладка "Настройки" =======================
 prefs_tab = tk.Frame(notebook)
 notebook.add(prefs_tab, text="Настройки")
@@ -4601,6 +4937,9 @@ def update_every_1_seconds():
     on_check()
     # Обновляем список задач на панели слева (задачи могли добавить, удалить или сменить)
     refresh_task_panel()
+    # Вкладка «База» открыта — показываем базу текущей задачи
+    if notebook.select() == str(udb_tab):
+        refresh_udb_tab()
     # Планируем следующее обновление через 1000 миллисекунд (1 секунд)
     root.after(1000, update_every_1_seconds)
 

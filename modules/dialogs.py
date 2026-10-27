@@ -266,6 +266,41 @@ def centered_askchecklist(title, entries, question, details=None, details_label=
     win.wait_window()
     return result[0]
 
+def centered_asklogin(title, message, login=""):
+    """Окно ввода логина и пароля. Возвращает (логин, пароль) или None, если отказались."""
+    win, frame = _create_dialog(title, message)
+    result = [None]
+
+    fields = tk.Frame(frame)
+    fields.pack(padx=15, pady=(0, 10), fill="x")
+    tk.Label(fields, text="Логин:").grid(row=0, column=0, sticky="w", pady=2)
+    login_entry = tk.Entry(fields, width=32)
+    login_entry.insert(0, login)
+    login_entry.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=2)
+    tk.Label(fields, text="Пароль:").grid(row=1, column=0, sticky="w", pady=2)
+    password_entry = tk.Entry(fields, width=32, show="•")
+    password_entry.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=2)
+    fields.grid_columnconfigure(1, weight=1)
+
+    def ok(event=None):
+        if login_entry.get().strip() and password_entry.get():
+            result[0] = (login_entry.get().strip(), password_entry.get())
+            win.destroy()
+
+    win.bind("<Return>", ok)
+    btn_frame = tk.Frame(frame)
+    btn_frame.pack(pady=(0, 15))
+    tk.Button(btn_frame, text="OK", command=ok, width=10).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Отмена", command=win.destroy, width=10).pack(side="left", padx=5)
+
+    _center_window(win)
+
+    win.focus_force()
+    win.deiconify()
+    (password_entry if login else login_entry).focus_set()
+    win.wait_window()
+    return result[0]
+
 def centered_askokcancel(title, message):
     """Центрированное окно с вопросом OK/Отмена. Возвращает True/False."""
     return _ask(title, message, "OK", "Отмена")
