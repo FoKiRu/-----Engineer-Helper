@@ -304,3 +304,39 @@ def centered_asklogin(title, message, login=""):
 def centered_askokcancel(title, message):
     """Центрированное окно с вопросом OK/Отмена. Возвращает True/False."""
     return _ask(title, message, "OK", "Отмена")
+
+def add_tooltip(widget, text, delay=500, wraplength=300):
+    """Всплывающая подсказка: появляется под курсором через delay мс после наведения на widget."""
+    state = {"job": None, "win": None}
+
+    def show():
+        state["job"] = None
+        win = tk.Toplevel(widget)
+        win.wm_overrideredirect(True)
+        win.attributes("-topmost", True)
+        tk.Label(win, text=text, justify="left", background="#ffffe1", relief="solid",
+                 borderwidth=1, padx=6, pady=3, wraplength=wraplength).pack()
+        win.update_idletasks()
+        # Под курсором, но не за правым и нижним краем экрана
+        x = min(widget.winfo_pointerx() + 12, widget.winfo_screenwidth() - win.winfo_reqwidth())
+        y = widget.winfo_pointery() + 18
+        if y + win.winfo_reqheight() > widget.winfo_screenheight():
+            y = widget.winfo_pointery() - win.winfo_reqheight() - 6
+        win.geometry(f"+{x}+{y}")
+        state["win"] = win
+
+    def enter(event):
+        hide()
+        state["job"] = widget.after(delay, show)
+
+    def hide(event=None):
+        if state["job"]:
+            widget.after_cancel(state["job"])
+            state["job"] = None
+        if state["win"]:
+            state["win"].destroy()
+            state["win"] = None
+
+    widget.bind("<Enter>", enter, add="+")
+    widget.bind("<Leave>", hide, add="+")
+    widget.bind("<ButtonPress>", hide, add="+")

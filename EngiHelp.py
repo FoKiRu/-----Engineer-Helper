@@ -30,7 +30,7 @@ from modules import check_gitignore_status, extract_icon_to_temp, get_short_path
 from modules import dialogs
 from modules.dialogs import _center_window, centered_info, centered_warning, centered_error
 from modules.dialogs import centered_askyesno, centered_askchecklist, centered_askchoice, centered_askselect
-from modules.dialogs import centered_asklogin
+from modules.dialogs import centered_asklogin, add_tooltip
 from modules.data_manager import load_data, save_data, load_settings_and_paths, get_task_data
 from modules.data_manager import save_settings_and_path as _save_recent_path
 from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
@@ -66,23 +66,35 @@ from modules.udb_api import result_file as udb_result_file
 from modules.changelog import CHANGELOG
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.1.2.0"  #Формат: vМajor.Minor.Patch.Build
-AUTHOR = "Автор: Кирилл Рутенко"
-EMAIL = "Эл. почта: k.rutenko@rkeeper.ru, xkiladx@gmail.com"
-DESCRIPTION = (
-    "EngiHelp — утилита для быстрого управления настройками R-Keeper.\n"
-    "С её помощью можно:\n"
-    "- находить и открывать нужный каталог R-Keeper\n"
-    "- просматривать и редактировать INI-файлы\n"
-    "- включать и отключать UseDBSync и UseSQL\n"
-    "- автоматически синхронизировать параметры Station и Server\n"
-    "- копировать недостающие INI-файлы из папки bin\\win\\ini\n"
-    "- сохранять и удалять задачи с привязкой к базе и MIDBASE\n"
-    "- очищать папки base и MIDBASE с возможностью резервной копии\n"
-    "- запускать и останавливать основные сервисы R-Keeper\n"
-    "- переключать версию RK и переносить данные между версиями\n"
-    "- автоматически сохранять последние пути и настройки\n"
-)
+SCRIPT_VERSION = "v2.1.3.0"  #Формат: vМajor.Minor.Patch.Build
+AUTHOR = "Кирилл Рутенко"
+EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
+DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
+# Возможности для вкладки «О программе»: (раздел, [пункты])
+FEATURES = [
+    ("Версии и INI-файлы", [
+        "поиск и открытие каталогов R-Keeper, история последних путей",
+        "переключение версии RK и перенос задач между версиями",
+        "просмотр и редактирование INI-файлов, синхронизация Station и Server",
+        "UseDBSync и UseSQL в один клик",
+        "копирование недостающих INI-файлов из bin\\win\\ini",
+    ]),
+    ("Задачи", [
+        "задачи с отдельными base и MIDBASE, панель задач слева",
+        "одна задача в нескольких версиях RK",
+        "восстановление задач, папки которых перенесли вручную",
+    ]),
+    ("Сервисы и база", [
+        "запуск и остановка основных сервисов, несколько refsrv в одной версии",
+        "очистка base и MIDBASE с резервной копией",
+        "автоматическое удаление старых бэкапов refsrv",
+        "подготовка rk7.udb через API utils.ucs.ru (вкладка «База»)",
+    ]),
+    ("Программа", [
+        "автоматическая проверка обновлений",
+        "история изменений — вкладка «Что нового»",
+    ]),
+]
 
 # ======================= Проверка URL файла .gitignore на GitHub =======================
 # Проверяем статус в .gitignore
@@ -176,7 +188,9 @@ if show_task_panel_var.get():
     task_panel.pack(side="left", fill="y")
 task_panel.pack_propagate(False)
 tk.Label(task_panel, text="Задачи", font=("TkDefaultFont", 8, "bold")).pack(pady=(4, 2))
-# Рамка вокруг списка с фоном списка — даёт отступ текста от левого края
+# Рамка вокруг списка; отступ текста от левого края — пробелы в начале строк
+# (TASK_PANEL_INDENT), чтобы выделение занимало всю ширину без белой полосы слева
+TASK_PANEL_INDENT = "  "
 task_list_frame = tk.Frame(task_panel, relief="solid", borderwidth=1)
 task_list_frame.pack(fill="both", expand=True, padx=(4, 2), pady=(0, 4))
 task_listbox = tk.Listbox(
@@ -188,7 +202,7 @@ task_listbox = tk.Listbox(
     font=("TkDefaultFont", 9)
 )
 task_list_frame.config(background=task_listbox.cget("background"))
-task_listbox.pack(fill="both", expand=True, padx=(10, 0))
+task_listbox.pack(fill="both", expand=True)
 
 notebook = ttk.Notebook(root)
 notebook.pack(fill="both", expand=True)
@@ -1958,8 +1972,12 @@ def setup_global_hotkeys():
     keyboard.add_hotkey('ctrl+x', cut_text_global)
 
 def on_closing():
-    """Сохраняет позицию окна и очищает горячие клавиши перед закрытием"""
+    """Сохраняет позицию окна, MID/CASH/REFSERVER задачи и очищает горячие клавиши перед закрытием"""
     save_window_position()
+    try:
+        save_network_ids_to_task()
+    except Exception as e:
+        print(f"[CLOSE] Не удалось сохранить сетевые ID задачи: {e}")
     try:
         keyboard.remove_all_hotkeys()
     except:
@@ -1973,7 +1991,7 @@ path_task_frame.pack(padx=10, pady=(10, 0), fill="x")
 
 # Фрейм для метки, кнопки "Открыть" и поля для номера задачи
 label_and_open_frame = tk.Frame(path_task_frame)
-label_and_open_frame.pack(fill="x", padx=5, pady=(5, 0), ipady=0)
+label_and_open_frame.pack(fill="x", padx=8, pady=(5, 0), ipady=0)
 
 # Левая часть: метка "Путь к RK7:" и кнопка "Открыть"
 tk.Label(
@@ -1983,17 +2001,19 @@ tk.Label(
 ).grid(row=0, column=0, sticky="w")
 
 # Кнопка "Открыть" (на той же строке, справа от метки)
-tk.Button(
+open_root_btn = tk.Button(
     label_and_open_frame,
     text="Открыть",
     command=open_explorer_to_root,
     font=("TkDefaultFont", 8)
-).grid(row=0, column=1, padx=(1, 0), sticky="w")
+)
+open_root_btn.grid(row=0, column=1, padx=(1, 0), sticky="w")
+add_tooltip(open_root_btn, "Открыть папку задачи в проводнике (нет папки задачи — папку версии RK)")
 
 
 # Фрейм для метки и комбобокса
 task_id_frame = tk.Frame(label_and_open_frame)
-task_id_frame.grid(row=0, column=2, columnspan=2, padx=(10, 0), sticky="w")
+task_id_frame.grid(row=0, column=2, columnspan=2, padx=(9, 0), sticky="w")
 
 tk.Label(
     task_id_frame,
@@ -2082,7 +2102,7 @@ def refresh_task_panel():
 
     task_listbox.delete(0, "end")
     for i, task in enumerate(tasks):
-        task_listbox.insert("end", task)
+        task_listbox.insert("end", TASK_PANEL_INDENT + task)
         if task in missing_tasks:
             task_listbox.itemconfig(i, foreground="red3")  # папка задачи удалена
         elif task in partly_missing:
@@ -2099,7 +2119,7 @@ def _on_task_panel_select(event):
     selection = task_listbox.curselection()
     if not selection:
         return
-    task_id_var.set(task_listbox.get(selection[0]))  # trace применит задачу
+    task_id_var.set(task_listbox.get(selection[0]).strip())  # trace применит задачу
     refresh_task_panel()
 
 task_listbox.bind("<<ListboxSelect>>", _on_task_panel_select)
@@ -2507,16 +2527,20 @@ def delete_task(confirm=True):
 
 
 # Кнопка "Сохранить"
-tk.Button(
+save_task_btn = tk.Button(
     label_and_open_frame,
     text="Сохранить",
     command=save_task_id, # Функция сохранения номера здачи
     font=("TkDefaultFont", 8)
-).grid(row=0, column=4, padx=(5, 0), sticky="w")
+)
+save_task_btn.grid(row=0, column=4, padx=(5, 0), sticky="e")
+add_tooltip(save_task_btn, "Сохранить задачу: копирует base версии в {задача}\\base, "
+                           "создаёт пустую MIDBASE, прописывает пути в INI и ярлыки")
+label_and_open_frame.grid_columnconfigure(3, weight=1)  # «Сохранить» прижата вправо: 8 px от рамки
 
 # Выбор пути
 path_frame = tk.Frame(path_task_frame)
-path_frame.pack(fill="x", padx=5, pady=(5, 5))
+path_frame.pack(fill="x", padx=8, pady=(5, 5))
 path_var = tk.StringVar()
 ini_paths, auto_update_enabled, task_from_version_enabled, keep_cloud_files_enabled, _ = load_settings_and_paths()
 if ini_paths:
@@ -2574,7 +2598,9 @@ def browse_path():
     path_var.set(os.path.join(product_root, "bin", "win").replace("\\", "/"))
     apply_path()
 
-tk.Button(path_frame, text="Обзор", command=browse_path, font=("TkDefaultFont", 8)).pack(side="left", padx=5)
+browse_btn = tk.Button(path_frame, text="Обзор", command=browse_path, font=("TkDefaultFont", 8))
+browse_btn.pack(side="left", padx=(5, 0))
+add_tooltip(browse_btn, "Выбрать папку версии RK (bin\\win внутри неё найдётся сам)")
 
 
 # Cинхронизация параметров из INI-файлов с приоритетом по дате изменения
@@ -3547,14 +3573,13 @@ def kill_doscash_process():
 launch_frame = tk.LabelFrame(settings_tab, text="Запуск")
 launch_frame.pack(padx=10, pady=(10, 10), fill="x")
 
-# 3 колонки в launch_frame
+# 2 колонки в launch_frame: по 8 px от левой и правой рамки, правая прижата вправо
 col1 = tk.Frame(launch_frame)
 col2 = tk.Frame(launch_frame)
-col3 = tk.Frame(launch_frame)
 
-col1.grid(row=0, column=0, sticky="nw", padx=5, pady=5)
-col2.grid(row=0, column=1, sticky="nw", padx=5, pady=5)
-col3.grid(row=0, column=2, sticky="nw", padx=5, pady=5)
+col1.grid(row=0, column=0, sticky="nw", padx=(8, 0), pady=5)
+col2.grid(row=0, column=1, sticky="ne", padx=(0, 8), pady=5)
+launch_frame.grid_columnconfigure(1, weight=1)
 
 # Строка 0: две комбинированные кнопки
 # Создаем фрейм для Refsrv + RK7man
@@ -3663,17 +3688,49 @@ tk.Button(frame_win_cash, text="📄", command=partial(open_log_file, "cash.stk"
 tk.Button(frame_win_cash, text="❌", command=kill_doscash_process, width=2)\
     .pack(side="left")  # Кнопка расположена справа в том же фрейме
 
+# Подсказки кнопок запуска: в каждой строке — запуск, лог (📄), закрытие (❌)
+_LOG_TIP = " в PowerShell: последние 200 строк, новые дописываются"
+for _frame, _tips in (
+    (frame_refsrv_rk7man, ("Запустить refsrv и RK7man текущей версии",
+                           "Логи refsrv.stk и rk7man.stk" + _LOG_TIP,
+                           "Закрыть refsrv и RK7man")),
+    (frame_midserv_wincash, ("Запустить MidServ, через 1,5 секунды — WinCash",
+                             "Логи midsrv.stk и cash.stk" + _LOG_TIP,
+                             "Закрыть MidServ и WinCash")),
+    (frame_refsrv, ("Запустить refsrv текущей версии. Уже запущен с этой базой — перезапуск, "
+                    "работает refsrv другой задачи — спросит, что сделать",
+                    "Лог refsrv.stk" + _LOG_TIP,
+                    "Закрыть refsrv текущей версии (refsrv других версий — на выбор)")),
+    (frame_rk7man, ("Запустить RK7man текущей версии (свой экземпляр перезапускается)",
+                    "Лог rk7man.stk" + _LOG_TIP,
+                    "Закрыть RK7man")),
+    (frame_midserv, ("Запустить MidServ текущей версии (свой экземпляр перезапускается)",
+                     "Лог midsrv.stk" + _LOG_TIP,
+                     "Закрыть MidServ")),
+    (frame_win_cash, ("Запустить WinCash текущей версии (свой экземпляр перезапускается)",
+                      "Лог cash.stk" + _LOG_TIP,
+                      "Закрыть WinCash (doscash.exe)")),
+):
+    for _btn, _tip in zip(_frame.winfo_children(), _tips):
+        add_tooltip(_btn, _tip)
+
 
 # Переключатели
 usesql_var = tk.IntVar(value=int(get_usesql_value(ini_path)))
 usedbsync_var = tk.IntVar(value=int(detect_consensus_value(ini_path)))
 port_var = tk.StringVar(value=get_port_value(ini_path))
 
-flags_lf = tk.LabelFrame(settings_tab, text="Параметры INI")
-flags_lf.pack(padx=10, pady=(0, 5), fill="x")
+# Ряд из двух столбцов: слева «Сетевые ID» (info_frame, создаётся ниже), справа «Параметры Ref-ini»
+ini_row = tk.Frame(settings_tab)
+ini_row.pack(padx=10, pady=(0, 10), fill="x")
+ini_row.grid_columnconfigure(0, weight=1)
+
+flags_lf = tk.LabelFrame(ini_row, text="Параметры Ref-ini")
+flags_lf.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
 
 flags_frame = tk.Frame(flags_lf)
-flags_frame.pack(padx=5, pady=5, fill="x")
+# Слева 4 px: у галочек квадратик сам отступает от края виджета — вровень с Port и кнопкой (8 px)
+flags_frame.pack(padx=(4, 0), pady=(2, 5), fill="x")
 
 usesql_cb = tk.Checkbutton(
     flags_frame,
@@ -3682,7 +3739,7 @@ usesql_cb = tk.Checkbutton(
     command=toggle_usesql,
     anchor="w"
 )
-usesql_cb.grid(row=0, column=0, sticky="w", padx=(0, 10))
+usesql_cb.grid(row=0, column=0, sticky="w")
 
 usedbsync_cb = tk.Checkbutton(
     flags_frame,
@@ -3691,11 +3748,13 @@ usedbsync_cb = tk.Checkbutton(
     command=toggle_usedbsync,
     anchor="w"
 )
-usedbsync_cb.grid(row=0, column=1, sticky="w", padx=(0, 10))
+usedbsync_cb.grid(row=1, column=0, sticky="w")
+add_tooltip(usedbsync_cb, "UseDBSync прописывается во все четыре INI:\n"
+                          "RKEEPER.INI, wincash.ini, rk7srv.INI, rk7man.ini")
 
 # Поле ввода порта
 port_inner = tk.Frame(flags_frame)
-port_inner.grid(row=0, column=2, sticky="w", padx=(0, 3))
+port_inner.grid(row=2, column=0, sticky="w", padx=(4, 0), pady=(2, 3))
 
 tk.Label(port_inner, text="Port:").pack(side="left")
 port_entry = tk.Entry(port_inner, textvariable=port_var, width=4)
@@ -3762,10 +3821,11 @@ def _apply_task_port(ini_path_val, ini_settings):
 port_spin_frame = tk.Frame(port_inner)
 port_spin_frame.pack(side="left")
 
-tk.Button(port_spin_frame, text="▲", width=1, font=("Arial", 4),
-          command=partial(adjust_port, 1)).pack(side="top")
-tk.Button(port_spin_frame, text="▼", width=1, font=("Arial", 4),
-          command=partial(adjust_port, -1)).pack(side="top")
+for _text, _delta in (("▲", 1), ("▼", -1)):
+    _btn = tk.Button(port_spin_frame, text=_text, width=1, font=("Arial", 4),
+                     command=partial(adjust_port, _delta))
+    _btn.pack(side="top")
+    add_tooltip(_btn, f"Порт refsrv {'+1' if _delta > 0 else '−1'}: записывается в rk7srv.INI и rk7man.ini")
 
 upgrade_anytime_btn = tk.Button(
     flags_frame,
@@ -3773,12 +3833,11 @@ upgrade_anytime_btn = tk.Button(
     command=upgrade_anytime_refsrv,
     anchor="w"
 )
-upgrade_anytime_btn.grid(row=0, column=3, sticky="w", padx=(7, 0))
+upgrade_anytime_btn.grid(row=3, column=0, sticky="ew", padx=(4, 8))
+add_tooltip(upgrade_anytime_btn, "Перезапустить refsrv задачи с UpgradeAnyTime=1 — после старта "
+                                 "параметр сбрасывается в 0. refsrv других задач не трогаются")
 
-flags_frame.grid_columnconfigure(0, weight=0)
-flags_frame.grid_columnconfigure(1, weight=0)
-flags_frame.grid_columnconfigure(2, weight=0)
-flags_frame.grid_columnconfigure(3, weight=1)
+flags_frame.grid_columnconfigure(0, weight=1)
 
 # ======================= Параметры из wincash.ini =======================
 station_var = tk.StringVar()
@@ -4061,24 +4120,36 @@ def save_wincash_params():
         except Exception as e:
             centered_error("Ошибка", f"Не удалось сохранить RKEEPER.INI:\n{e}")
 
-def apply_network_ids():
-    task_id = task_id_var.get().strip()
+_network_ids_save_job = None
 
-    if not task_id:
-        centered_warning("Предупреждение", "Сначала выберите или сохраните задачу!")
+def _schedule_network_ids_save(*args):
+    """MID, CASH или REFSERVER изменились — через секунду сохраняем их в задачу (JSON).
+    INI-файлы trace обновляет сразу, сюда попадает только запись в задачу."""
+    global _network_ids_save_job
+    if _network_ids_save_job:
+        root.after_cancel(_network_ids_save_job)
+    _network_ids_save_job = root.after(1000, save_network_ids_to_task, task_id_var.get().strip())
+
+def save_network_ids_to_task(task_id=None):
+    """Сохраняет MID, CASH и REFSERVER в текущую задачу. task_id — задача, для которой
+    запланировано сохранение: если её уже сменили, данные сохранила сама смена задачи."""
+    global _network_ids_save_job
+    if _network_ids_save_job:
+        root.after_cancel(_network_ids_save_job)
+        _network_ids_save_job = None
+    current = task_id_var.get().strip()
+    if not current or (task_id is not None and task_id != current):
         return
+    task = load_data().get("tasks", {}).get(current)
+    task_ini = task.get("ini_path", "") if task else ""
+    if task_ini and ini_path and os.path.normcase(os.path.normpath(task_ini)) \
+            != os.path.normcase(os.path.normpath(ini_path)):
+        return  # открыта другая версия RK — значения не этой задачи
+    apply_network_ids_silent_for_task(current, write_ini=False)
 
-    apply_network_ids_silent()
-    save_refserver_params()
-    centered_info("Успех", f"Данные сохранены для задачи {task_id}")
-
-def apply_network_ids_silent():
-    """Сохраняет Station и Server в JSON без показа messagebox (для фонового сохранения при смене задачи)."""
-    task_id = task_id_var.get().strip()
-    apply_network_ids_silent_for_task(task_id)
-
-def apply_network_ids_silent_for_task(task_id):
-    """Сохраняет Station, Server и REFSERVER в JSON для указанной задачи (без messagebox)."""
+def apply_network_ids_silent_for_task(task_id, write_ini=True):
+    """Сохраняет Station, Server и REFSERVER в JSON для указанной задачи (без messagebox).
+    write_ini — заодно записать значения в INI-файлы."""
     if not task_id:
         return
 
@@ -4120,8 +4191,9 @@ def apply_network_ids_silent_for_task(task_id):
     save_data(data)
 
     # Дополнительно применяем в реальные ini-файлы
-    save_wincash_params()
-    save_refserver_params()
+    if write_ini:
+        save_wincash_params()
+        save_refserver_params()
 
 def apply_ini_flags_silent_for_task(task_id):
     """Сохраняет UseSQL, UseDBSync и Port в JSON для указанной задачи (при смене задачи)."""
@@ -4171,33 +4243,26 @@ def apply_ini_flags_silent_for_task(task_id):
     save_data(data)
 
 # === UI ===
-info_frame = tk.LabelFrame(settings_tab, text="Сетевые ID")
-info_frame.pack(padx=10, pady=(5, 10), fill="x", ipadx=2, ipady=2)
+# Левый столбец ряда ini_row (справа — «Параметры Ref-ini»): REFSERVER, MID, CASH
+info_frame = tk.LabelFrame(ini_row, text="Сетевые ID")
+info_frame.grid(row=0, column=0, sticky="nsew")
 
-# Столбец 0: Метки MID и CASH
-tk.Label(info_frame, text="MID:").grid(row=0, column=0, sticky="w", padx=(5, 0), pady=3)
-tk.Label(info_frame, text="CASH:").grid(row=1, column=0, sticky="w", padx=(5, 0), pady=3)
-
-# Столбец 1: Поля ввода MID и CASH
-tk.Entry(info_frame, textvariable=server_var).grid(row=0, column=1, sticky="ew", padx=5, pady=3)
-tk.Entry(info_frame, textvariable=station_var).grid(row=1, column=1, sticky="ew", padx=5, pady=3)
-
-# Столбец 2: Метка REFSERVER
-tk.Label(info_frame, text="REFSERVER:").grid(row=0, column=2, sticky="w", padx=(15, 0), pady=3)
-
-# Столбец 3: Поле REFSERVER и кнопка "Применить"
-tk.Entry(info_frame, textvariable=refserver_var, width=20).grid(row=0, column=3, sticky="ew", padx=5, pady=3)
-apply_btn = tk.Button(info_frame, text="Применить", command=apply_network_ids)
-apply_btn.grid(row=1, column=3, sticky="ew", padx=13, pady=2)
+for _row, (_label, _var) in enumerate((("REF:", refserver_var),
+                                       ("MID:", server_var),
+                                       ("CASH:", station_var))):
+    tk.Label(info_frame, text=_label).grid(row=_row, column=0, sticky="w", padx=(8, 0), pady=3)
+    tk.Entry(info_frame, textvariable=_var).grid(row=_row, column=1, sticky="ew", padx=(5, 8), pady=3)
+    info_frame.grid_rowconfigure(_row, weight=1)  # поля по всей высоте, вровень с правым столбцом
 
 info_frame.grid_columnconfigure(1, weight=1)
-info_frame.grid_columnconfigure(2, minsize=80)
-info_frame.grid_columnconfigure(3, minsize=80)
 
 # Автосохранение при любом изменении
 station_var.trace_add("write", lambda *args: save_wincash_params())
 server_var.trace_add("write", lambda *args: save_wincash_params())
 refserver_var.trace_add("write", lambda *args: save_refserver_params())
+# ...и через секунду — в настройки выбранной задачи
+for _var in (station_var, server_var, refserver_var):
+    _var.trace_add("write", _schedule_network_ids_save)
 
 
 
@@ -4278,7 +4343,7 @@ task_actions_lf = tk.LabelFrame(settings_tab, text="Управление зад�
 task_actions_lf.pack(padx=10, pady=(0, 10), fill="x")
 
 check_folder_frame = tk.Frame(task_actions_lf)
-check_folder_frame.pack(padx=5, pady=5, anchor="w", fill="x")
+check_folder_frame.pack(padx=3, pady=5, anchor="w", fill="x")  # 3 + padx кнопок 5 = 8 px от рамки
 
 # Первый ряд: "Открыть задачу в SD", "Clear MIDBASE", "Clear Base"
 check_btn = tk.Button(check_folder_frame, text="Открыть задачу в SD", command=open_task_in_sd)
@@ -4301,6 +4366,18 @@ change_version_btn.grid(row=1, column=1, padx=5, sticky="ew", pady=(5, 0))
 # Кнопка "Cloud RK7man" (экспериментальная, под "Очистить Base")
 cloud_rk7man_btn = tk.Button(check_folder_frame, text="Cloud RK7man", command=lambda: cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path))
 cloud_rk7man_btn.grid(row=1, column=2, padx=5, sticky="ew", pady=(5, 0))
+
+for _btn, _tip in (
+    (check_btn, "Найти задачу по номеру в Service Desk (sd.rkeeper.ru)"),
+    (show_folders_btn, "Удалить файлы из MIDBASE задачи. Можно оставить WORK.UDB, "
+                       "Archive, Backup и refsdata.udb и сделать резервную копию"),
+    (clear_base_btn, "Удалить лишнее из base задачи — rk7.udb, ral.dat, dealerpresets.udb "
+                     "и другие нужные файлы остаются. Можно сделать резервную копию"),
+    (delete_task_btn, "Удалить задачу: папки base и MIDBASE, папку задачи и запись в списке задач"),
+    (change_version_btn, "Перенести базу задачи в другую версию RK (refsrv и RK7man будут закрыты)"),
+    (cloud_rk7man_btn, "Запустить RK7man с подключением к облачному серверу по строке подключения"),
+):
+    add_tooltip(_btn, _tip)
 
 # Настройка весов строк и столбцов для равномерного распределения
 check_folder_frame.grid_columnconfigure(0, weight=1)
@@ -4918,17 +4995,61 @@ for entry in CHANGELOG:
         changelog_text.insert("end", f"•  {item}\n", "item")
 changelog_text.config(state="disabled")
 
-# Info tab
+# ======================= Вкладка "О программе" =======================
 info_tab = tk.Frame(notebook)
 notebook.add(info_tab, text="О программе")
 
-info_label = tk.Label(info_tab, text=f"{DESCRIPTION}\n{AUTHOR}\n{EMAIL}\n{SCRIPT_VERSION}", justify="left", anchor="nw")
-info_label.pack(padx=10, pady=10, anchor="nw", fill="both", expand=True)
-info_label.bind('<Configure>', lambda e: info_label.config(wraplength=e.width - 20))
+# Внизу — автор и кнопка проверки обновления, выше — описание с прокруткой
+info_bottom = tk.Frame(info_tab)
+info_bottom.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
+tk.Label(info_bottom, text=f"Автор: {AUTHOR}\n{EMAIL}", justify="left", anchor="w",
+         foreground="gray30").pack(side="left")
+tk.Button(info_bottom, text="Проверить обновление", command=lambda: check_for_updates(silent=False))\
+    .pack(side="right", anchor="s")
+ttk.Separator(info_tab, orient="horizontal").pack(side="bottom", fill="x", padx=10, pady=(0, 6))
 
-# Обёртка для ручной проверки через кнопку (справа)
-tk.Button(info_tab, text="Проверить обновление", command=lambda: check_for_updates(silent=False))\
-    .pack(padx=10, pady=(0, 10), anchor="e")
+info_scroll = tk.Scrollbar(info_tab, orient="vertical")
+info_text = tk.Text(
+    info_tab,
+    wrap="word",
+    font="TkDefaultFont",
+    relief="flat",
+    borderwidth=0,
+    background=info_tab.cget("background"),
+    cursor="arrow",
+    padx=10,
+    pady=8,
+    yscrollcommand=info_scroll.set
+)
+info_scroll.config(command=info_text.yview)
+info_text.pack(side="left", fill="both", expand=True)
+
+info_text.tag_configure("title", font=("TkDefaultFont", 12, "bold"))
+info_text.tag_configure("version", font=("TkDefaultFont", 9), foreground="gray40")
+info_text.tag_configure("desc", spacing1=2, spacing3=2)
+info_text.tag_configure("section", font=("TkDefaultFont", 9, "bold"), spacing1=6)
+info_text.tag_configure("item", lmargin1=8, lmargin2=20, spacing1=1)
+
+info_text.insert("end", "EngiHelp", "title")
+info_text.insert("end", f"  {SCRIPT_VERSION}\n", "version")
+info_text.insert("end", f"{DESCRIPTION}\n", "desc")
+for section, items in FEATURES:
+    info_text.insert("end", f"{section}\n", "section")
+    for item in items:
+        info_text.insert("end", f"•  {item}\n", "item")
+info_text.delete("end-2c")  # без пустой строки в конце
+info_text.config(state="disabled")
+
+def _update_info_scroll(event=None):
+    """Полоса прокрутки — только если описание не помещается."""
+    first, last = info_text.yview()
+    if first > 0 or last < 1:
+        if not info_scroll.winfo_ismapped():
+            info_scroll.pack(side="right", fill="y", before=info_text)
+    elif info_scroll.winfo_ismapped():
+        info_scroll.pack_forget()
+
+info_text.bind("<Configure>", lambda e: info_text.after_idle(_update_info_scroll))
 
 def update_every_1_seconds():
     # Обновляем информацию о WinCash и RKEEPER по приоритету
