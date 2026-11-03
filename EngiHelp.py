@@ -47,7 +47,7 @@ from modules.process_utils import launch_refsrv, wait_and_launch_refsrv
 from modules.cloud_rk7man import cloud_rk7man_dialog
 from modules.shortcuts import create_task_shortcuts
 from modules.task_manager import extract_task_id_from_rk7srv_ini, find_product_root
-from modules.task_manager import extract_rk_version_from_path, find_available_rk_versions
+from modules.task_manager import extract_rk_version_from_path, find_available_rk_versions, find_rk_versions_in_dir
 from modules.task_manager import create_task_for_version
 from modules.task_manager import find_running_task_by_ports, find_last_running_task, _main_refsrv_port
 from modules.task_manager import relocate_task, add_found_task_version, find_task_in_versions, get_missing_versions
@@ -64,9 +64,10 @@ from modules.udb_api import default_operations as udb_default_operations, rk_ver
 from modules.udb_api import load_credential, save_credential, remove_credential, api_host
 from modules.udb_api import result_file as udb_result_file
 from modules.changelog import CHANGELOG
+from modules.sql_database import create_database as create_sql_database, SqlDatabaseError
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.1.3.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.1.4.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -1136,11 +1137,30 @@ def change_rk_version():
     other_versions = sorted(other_versions, reverse=True)  # новые версии сверху
 
     if not other_versions:
-        centered_info("Информация",
-            f"Других версий RK не найдено.\n"
-            f"Текущая версия: {current_version}\n"
-            f"Директория поиска: {versions_search_dir}")
-        return
+        if not centered_askyesno("Информация",
+                f"Других версий RK не найдено.\n"
+                f"Текущая версия: {current_version}\n"
+                f"Директория поиска: {versions_search_dir}\n\n"
+                "Указать другую директорию?"):
+            return
+
+        selected_dir = filedialog.askdirectory(
+            title="Выберите папку с версиями RK",
+            initialdir=versions_search_dir
+        )
+        if not selected_dir:
+            return
+
+        versions_search_dir = selected_dir
+        available_versions = find_rk_versions_in_dir(versions_search_dir)
+        other_versions = sorted(
+            [v for v in available_versions if v != current_version],
+            reverse=True
+        )
+        if not other_versions:
+            centered_info("Информация",
+                f"Других версий RK не найдено в выбранной директории:\n{versions_search_dir}")
+            return
 
     # === Диалог выбора версии ===
     select_win = tk.Toplevel(root)
@@ -3119,8 +3139,25 @@ def _kill_and_wait(procs, timeout=10):
             proc.kill()
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
-    _, alive = psutil.wait_procs(procs, timeout=timeout)
+    # Не psutil.wait_procs: у только что убитого процесса Windows отказывает в доступе
+    # (AccessDenied) — wait_procs падает, и refsrv после закрытия не запускался заново
+    deadline = time.time() + timeout
+    alive = list(procs)
+    while alive:
+        alive = [p for p in alive if _process_alive(p)]
+        if not alive or time.time() >= deadline:
+            break
+        time.sleep(0.2)
     return alive
+
+def _process_alive(proc):
+    """True — процесс ещё работает (завершённый или завершающийся процесс — False)."""
+    try:
+        return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.AccessDenied:
+        return psutil.pid_exists(proc.pid)
 
 # ======================= Параметры запущенных refsrv =======================
 # refsrv читает имя сервера и базу из rk7srv.INI при старте, а INI потом могут
@@ -4725,6 +4762,153 @@ def udb_process():
                     udb_log(f"Не удалось удалить файл на сервере ({file_id}): {e}", "error")
     _udb_run(job, "Загрузка")
 
+
+def open_sql_database_dialog():
+    """Создаёт пустую базу SQL Server с номером выбранной задачи в имени."""
+    selected_task_id = task_id_var.get().strip()
+    if not selected_task_id:
+        centered_warning("Создание БД SQL", "Сначала выберите задачу.")
+        return
+
+    saved = load_data()["settings"].get("sql_database", {})
+    win = tk.Toplevel(root)
+    win.withdraw()
+    win.title("Создание БД SQL")
+    if icon_path:
+        win.iconbitmap(icon_path)
+    win.transient(root)
+    win.grab_set()
+
+    frame = tk.Frame(win)
+    frame.pack(fill="both", expand=True)
+    tk.Label(frame, text=(
+        f"Задача: {selected_task_id}\n"
+        "На SQL Server будет создана новая пустая база данных."
+    ), justify="left").pack(anchor="w", padx=12, pady=(12, 8))
+
+    fields = tk.Frame(frame)
+    fields.pack(fill="x", padx=12)
+    fields.grid_columnconfigure(1, weight=1)
+
+    server_var = tk.StringVar(value=saved.get("server", "localhost"))
+    database_var = tk.StringVar(value=f"RK7_{selected_task_id}")
+    windows_auth_var = tk.BooleanVar(value=saved.get("windows_auth", True))
+    username_var = tk.StringVar(value=saved.get("username", ""))
+    password_var = tk.StringVar()
+
+    tk.Label(fields, text="SQL Server:").grid(row=0, column=0, sticky="w", pady=2)
+    tk.Entry(fields, textvariable=server_var, width=32).grid(row=0, column=1, sticky="ew", pady=2)
+    tk.Label(fields, text="Имя базы:").grid(row=1, column=0, sticky="w", pady=2)
+    tk.Entry(fields, textvariable=database_var, width=32).grid(row=1, column=1, sticky="ew", pady=2)
+
+    auth_check = tk.Checkbutton(
+        frame, text="Проверка подлинности Windows", variable=windows_auth_var
+    )
+    auth_check.pack(anchor="w", padx=12, pady=(6, 2))
+
+    credentials = tk.Frame(frame)
+    credentials.pack(fill="x", padx=12)
+    credentials.grid_columnconfigure(1, weight=1)
+    tk.Label(credentials, text="Пользователь:").grid(row=0, column=0, sticky="w", pady=2)
+    username_entry = tk.Entry(credentials, textvariable=username_var, width=32)
+    username_entry.grid(row=0, column=1, sticky="ew", pady=2)
+    tk.Label(credentials, text="Пароль:").grid(row=1, column=0, sticky="w", pady=2)
+    password_entry = tk.Entry(credentials, textvariable=password_var, show="*", width=32)
+    password_entry.grid(row=1, column=1, sticky="ew", pady=2)
+
+    def update_auth_state():
+        state = "disabled" if windows_auth_var.get() else "normal"
+        username_entry.config(state=state)
+        password_entry.config(state=state)
+
+    auth_check.config(command=update_auth_state)
+    update_auth_state()
+
+    state = {"busy": False}
+
+    def on_close():
+        if not state["busy"]:
+            win.destroy()
+
+    win.protocol("WM_DELETE_WINDOW", on_close)
+
+    def on_create():
+        server = server_var.get().strip()
+        database = database_var.get().strip()
+        windows_auth = windows_auth_var.get()
+        username = username_var.get().strip()
+        password = password_var.get()
+
+        if not server:
+            centered_warning("Создание БД SQL", "Укажите адрес SQL Server.")
+            return
+        if not database:
+            centered_warning("Создание БД SQL", "Укажите имя базы данных.")
+            return
+        if selected_task_id not in database:
+            centered_warning(
+                "Создание БД SQL",
+                f"Имя базы должно содержать номер задачи {selected_task_id}."
+            )
+            return
+        if not windows_auth and (not username or not password):
+            centered_warning(
+                "Создание БД SQL", "Укажите пользователя и пароль SQL Server."
+            )
+            return
+
+        state["busy"] = True
+        create_btn.config(state="disabled")
+        cancel_btn.config(state="disabled")
+
+        def job():
+            try:
+                created_name = create_sql_database(
+                    server, database, windows_auth, username, password
+                )
+            except SqlDatabaseError as e:
+                error_message = str(e)
+                def show_error():
+                    if not win.winfo_exists():
+                        return
+                    state["busy"] = False
+                    create_btn.config(state="normal")
+                    cancel_btn.config(state="normal")
+                    centered_error("Создание БД SQL", error_message)
+                root.after(0, show_error)
+                return
+
+            def show_success():
+                if not win.winfo_exists():
+                    return
+                data = load_data()
+                data["settings"]["sql_database"] = {
+                    "server": server,
+                    "windows_auth": windows_auth,
+                    "username": "" if windows_auth else username,
+                }
+                save_data(data)
+                win.destroy()
+                centered_info(
+                    "Создание БД SQL",
+                    f"База данных {created_name} успешно создана на сервере {server}."
+                )
+            root.after(0, show_success)
+
+        threading.Thread(target=job, daemon=True).start()
+
+    buttons = tk.Frame(frame)
+    buttons.pack(pady=(10, 12))
+    create_btn = tk.Button(buttons, text="Создать", command=on_create, width=12)
+    create_btn.pack(side="left", padx=5)
+    cancel_btn = tk.Button(buttons, text="Отмена", command=on_close, width=12)
+    cancel_btn.pack(side="left", padx=5)
+
+    _center_window(win)
+    win.focus_force()
+    win.deiconify()
+
+
 tk.Label(udb_tab, text="Подготовка rk7.udb для стенда через utils.ucs.ru",
          font=("TkDefaultFont", 9, "bold")).pack(padx=10, pady=(8, 2), anchor="w")
 udb_task_label = tk.Label(udb_tab, anchor="w", justify="left")
@@ -4759,7 +4943,8 @@ udb_action_frame = tk.Frame(udb_tab)
 udb_action_frame.pack(padx=10, pady=(6, 0), fill="x")
 udb_process_btn = tk.Button(udb_action_frame, text="Подготовить базу", command=udb_process)
 udb_process_btn.pack(side="left")
-udb_progressbar = ttk.Progressbar(udb_action_frame, length=200)
+tk.Button(udb_action_frame, text="Создать БД SQL", command=open_sql_database_dialog).pack(side="left", padx=(6, 0))
+udb_progressbar = ttk.Progressbar(udb_action_frame, length=120)
 udb_progressbar.pack(side="left", padx=(10, 0), fill="x", expand=True)
 udb_status_label = tk.Label(udb_tab, anchor="w", fg="gray40", font=("TkDefaultFont", 8))
 udb_status_label.pack(padx=10, anchor="w")

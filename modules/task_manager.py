@@ -66,12 +66,8 @@ def extract_rk_version_from_path(path):
         return match.group(1)
     return None
 
-def find_available_rk_versions(path):
-    """Находит все доступные версии INST в родительской директории."""
-    product_root = find_product_root(path)
-    if not product_root:
-        return []
-    parent_dir = os.path.dirname(product_root)
+def find_rk_versions_in_dir(parent_dir):
+    """Находит версии RK в папках INST указанной директории."""
     versions = []
     try:
         for item in os.listdir(parent_dir):
@@ -86,6 +82,14 @@ def find_available_rk_versions(path):
     except Exception as e:
         print(f"Ошибка сканирования версий: {e}")
     return versions
+
+
+def find_available_rk_versions(path):
+    """Находит все доступные версии INST в родительской директории."""
+    product_root = find_product_root(path)
+    if not product_root:
+        return []
+    return find_rk_versions_in_dir(os.path.dirname(product_root))
 
 # ======================= Создание задачи и подписи =======================
 
