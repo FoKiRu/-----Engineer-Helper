@@ -64,9 +64,10 @@ from modules.udb_api import load_credential, save_credential, remove_credential,
 from modules.udb_api import result_file as udb_result_file
 from modules.changelog import CHANGELOG
 from modules.sql_database import create_database as create_sql_database, SqlDatabaseError
+from modules.log_viewer import open_log_viewer
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.1.5.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.1.6.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -3624,16 +3625,11 @@ frame_refsrv_rk7man.pack(anchor="w", pady=(0, 4))
 
 # Онлайн лог с 200 строками
 def open_log_file(log_name):
-    log_path = os.path.join(ini_path, log_name)
-    cmd = f'start powershell -NoExit -Command "Get-Content \'{log_path}\' -Tail 200 -Wait"'
-    subprocess.Popen(cmd, shell=True)
+    open_log_viewer(root, [os.path.join(ini_path, log_name)])
 
 def open_multiple_logs(*log_names):
     log_paths = [os.path.join(ini_path, name) for name in log_names]
-    jobs = [f"Start-job {{ Get-Content -Path '{p}' -Tail 200 -Wait }}" for p in log_paths]
-    cmd = " ; ".join(jobs) + "; Receive-Job -Wait -AutoremoveJob *"
-    full_cmd = f'start powershell -NoExit -Command \"{cmd}\"'
-    subprocess.Popen(full_cmd, shell=True)
+    open_log_viewer(root, log_paths)
 
 # Кнопка Refsrv + RK7man
 tk.Button(frame_refsrv_rk7man, text="Refsrv + RK7man", command=run_refsrv_and_rk7man, width=15)\
@@ -3725,7 +3721,7 @@ tk.Button(frame_win_cash, text="❌", command=kill_doscash_process, width=2)\
     .pack(side="left")  # Кнопка расположена справа в том же фрейме
 
 # Подсказки кнопок запуска: в каждой строке — запуск, лог (📄), закрытие (❌)
-_LOG_TIP = " в PowerShell: последние 200 строк, новые дописываются"
+_LOG_TIP = ": последние 200 строк, новые дописываются"
 for _frame, _tips in (
     (frame_refsrv_rk7man, ("Запустить refsrv и RK7man текущей версии",
                            "Логи refsrv.stk и rk7man.stk" + _LOG_TIP,
