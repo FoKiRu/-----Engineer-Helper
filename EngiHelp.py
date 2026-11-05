@@ -66,7 +66,7 @@ from modules.changelog import CHANGELOG
 from modules.sql_database import create_database as create_sql_database, SqlDatabaseError
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.1.4.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.1.5.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
