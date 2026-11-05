@@ -13,21 +13,20 @@ import threading
 import logging
 import requests
 import sys
-import tempfile
 import webbrowser
 import keyboard
 import queue
 import json
 import ctypes
 import ctypes.wintypes
-from packaging import version
 
 # ======================= Модули =======================
 # Папка modules лежит рядом со скриптом (в exe — распаковывается PyInstaller'ом)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from modules import check_gitignore_status, extract_icon_to_temp, get_short_path_name
+from modules import check_gitignore_status, extract_icon_to_temp
 from modules import dialogs
+from modules.app_updater import fetch_remote_version, is_newer_version, download_update, restart_with_update
 from modules.dialogs import _center_window, centered_info, centered_warning, centered_error
 from modules.dialogs import centered_askyesno, centered_askchecklist, centered_askchoice, centered_askselect
 from modules.dialogs import centered_asklogin, add_tooltip
@@ -4425,21 +4424,14 @@ check_folder_frame.grid_columnconfigure(2, weight=1)
 
 # Проверка версии
 def check_for_updates(silent=False):
-    url_exe = "https://github.com/FoKiRu/-----Engineer-Helper/raw/main/dist/EngiHelp.exe"
-    url_py = "https://raw.githubusercontent.com/FoKiRu/-----Engineer-Helper/main/EngiHelp.py"
     try:
-        version_response = requests.get(url_py, timeout=5)
-        version_response.raise_for_status()
-        match = re.search(r'SCRIPT_VERSION\s*=\s*"v([\d.]+)"', version_response.text)
-        if not match:
+        remote_version = fetch_remote_version()
+        if not remote_version:
             if not silent:
                 centered_warning("Ошибка", "Не удалось определить версию на GitHub.")
             return
-        remote_version = f"v{match.group(1)}"
-        current_version = version.parse(SCRIPT_VERSION.lstrip('v'))
-        remote_version = version.parse(remote_version.lstrip('v'))
 
-        if remote_version <= current_version:
+        if not is_newer_version(remote_version, SCRIPT_VERSION):
             if not silent:
                 centered_info("Актуальная версия", f"Установлена последняя версия: {SCRIPT_VERSION}")
             return
@@ -4447,36 +4439,8 @@ def check_for_updates(silent=False):
         if not centered_askyesno("Обновление", f"Доступна новая версия: {remote_version}\nОбновить сейчас?"):
             return
 
-        response = requests.get(url_exe, timeout=10)
-        response.raise_for_status()
-        temp_dir = tempfile.gettempdir()
-        temp_exe = os.path.join(temp_dir, "EngiHelp_updated.exe")
-        with open(temp_exe, "wb") as f:
-            f.write(response.content)
-        current_exe = sys.executable
-        short_exe = get_short_path_name(current_exe)
-        bat_path = os.path.join(temp_dir, "restart_engihelp.bat")
-        with open(bat_path, "w", encoding="utf-8") as f:
-            f.write(f"""@echo off
-        chcp 65001 >nul
-        echo Обновление завершено.
-        echo Ожидание завершения старой версии...
-        :waitloop
-        tasklist | find /i "{os.path.basename(short_exe)}" >nul
-        if not errorlevel 1 (
-            timeout /t 1 >nul
-            goto waitloop
-        )
-        echo Замена файла...
-        copy /y "{temp_exe}" "{short_exe}"
-        start "" "{short_exe}"
-        echo Запуск новой версии примерно через:
-        for /l %%i in (8,-1,1) do (
-            echo %%i...
-            timeout /t 1 >nul
-        )
-        """)
-        subprocess.Popen(['cmd', '/c', bat_path], shell=False)
+        temp_exe = download_update()
+        restart_with_update(temp_exe, sys.executable)
         save_window_position()
         root.destroy()
     except Exception as e:
