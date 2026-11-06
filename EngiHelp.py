@@ -65,9 +65,10 @@ from modules.udb_api import result_file as udb_result_file
 from modules.changelog import CHANGELOG
 from modules.sql_database import create_database as create_sql_database, SqlDatabaseError
 from modules.log_viewer import open_log_viewer
+from modules.feature_server import feature_server_dialog
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.1.6.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.1.7.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -89,6 +90,7 @@ FEATURES = [
         "запуск и остановка основных сервисов, несколько refsrv в одной версии",
         "очистка base и MIDBASE с резервной копией",
         "автоматическое удаление старых бэкапов refsrv",
+        "установка Feature Server и плагинов Interactive Reports для RK7man",
         "подготовка rk7.udb через API utils.ucs.ru (вкладка «База»)",
     ]),
     ("Программа", [
@@ -132,7 +134,7 @@ def get_window_width():
     return BASE_WINDOW_WIDTH + (TASK_PANEL_WIDTH if show_task_panel_var.get() else 0)
 
 WINDOW_WIDTH = get_window_width()
-WINDOW_HEIGHT = 510
+WINDOW_HEIGHT = 540
 WINDOW_OFFSET_X = 223
 WINDOW_OFFSET_Y = 100   
 
@@ -4399,6 +4401,20 @@ change_version_btn.grid(row=1, column=1, padx=5, sticky="ew", pady=(5, 0))
 cloud_rk7man_btn = tk.Button(check_folder_frame, text="Cloud RK7man", command=lambda: cloud_rk7man_dialog(root, ini_path, keep_cloud_files_var, icon_path))
 cloud_rk7man_btn.grid(row=1, column=2, padx=5, sticky="ew", pady=(5, 0))
 
+
+def open_feature_server_installer():
+    selected_task_id = task_id_var.get().strip()
+    feature_server_dialog(
+        root, selected_task_id, ini_path,
+        get_current_task_base_path(selected_task_id), icon_path
+    )
+
+
+feature_server_btn = tk.Button(
+    check_folder_frame, text="Установить FS", command=open_feature_server_installer
+)
+feature_server_btn.grid(row=2, column=0, padx=5, sticky="ew", pady=(5, 0))
+
 for _btn, _tip in (
     (check_btn, "Найти задачу по номеру в Service Desk (sd.rkeeper.ru)"),
     (show_folders_btn, "Удалить файлы из MIDBASE задачи. Можно оставить WORK.UDB, "
@@ -4408,6 +4424,7 @@ for _btn, _tip in (
     (delete_task_btn, "Удалить задачу: папки base и MIDBASE, папку задачи и запись в списке задач"),
     (change_version_btn, "Перенести базу задачи в другую версию RK (refsrv и RK7man будут закрыты)"),
     (cloud_rk7man_btn, "Запустить RK7man с подключением к облачному серверу по строке подключения"),
+    (feature_server_btn, "Скачать и установить Feature Server, настроить SQL и плагины RK7man"),
 ):
     add_tooltip(_btn, _tip)
 

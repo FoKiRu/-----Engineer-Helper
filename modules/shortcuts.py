@@ -33,6 +33,11 @@ def create_task_shortcuts(task_folder, bin_win_path):
         if os.path.isfile(wincash_src):
             create_lnk(os.path.join(task_folder, "wincash.lnk"), wincash_src, "")
 
+        # 6. Feature Server, если установлен в папке задачи
+        fs_src = os.path.join(task_folder, "featureserver", "IRReportsFSPrj.exe")
+        if os.path.isfile(fs_src):
+            create_lnk(os.path.join(task_folder, "FS.lnk"), fs_src, "/desktop")
+
         print(f"[OK] Ярлыки созданы в {task_folder}")
     except Exception as e:
         print(f"[WARN] Не удалось создать ярлыки: {e}")

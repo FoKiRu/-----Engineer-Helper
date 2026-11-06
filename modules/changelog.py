@@ -5,6 +5,15 @@
 
 CHANGELOG = [
     {
+        "version": "v2.1.7.0",
+        "date": "06.11.2026",
+        "items": [
+            "Добавлена установка Feature Server и плагинов Interactive Reports для текущего RK7man",
+            "Подключение FS к SQL записывается в формате OLEDB с проверкой Windows или SQL Server",
+            "В папке задачи создаётся ярлык FS.lnk с ключом /desktop",
+        ],
+    },
+    {
         "version": "v2.1.6.0",
         "date": "05.11.2026",
         "items": [

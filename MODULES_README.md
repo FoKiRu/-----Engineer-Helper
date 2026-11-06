@@ -59,6 +59,12 @@
 - `CHANGELOG` - список версий (новые сверху): `version`, `date`, `items`
 - При каждом повышении `SCRIPT_VERSION` добавляется запись в начало списка
 
+### modules/feature_server.py
+Установка Feature Server через PowerShell-модуль `deploy-stands/get-ir/get-ir.psm1`:
+- `feature_server_dialog()` - окно параметров дистрибутива, SQL и плагинов RK7man
+- `install_feature_server()` - фоновый запуск Get-IR и проверка созданных файлов
+- Настройки без паролей сохраняются в `settings.feature_server`
+
 ## Использование
 
 ```python
