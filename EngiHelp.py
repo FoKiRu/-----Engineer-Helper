@@ -68,7 +68,7 @@ from modules.log_viewer import open_log_viewer
 from modules.feature_server import feature_server_dialog
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.1.7.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.1.7.1"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
