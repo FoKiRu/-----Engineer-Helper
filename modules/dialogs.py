@@ -266,6 +266,33 @@ def centered_askchecklist(title, entries, question, details=None, details_label=
     win.wait_window()
     return result[0]
 
+def centered_askstring(title, message):
+    """Окно ввода одной строки. Возвращает текст без крайних пробелов или None при отмене."""
+    win, frame = _create_dialog(title, message)
+    result = [None]
+
+    entry = tk.Entry(frame, width=40)
+    entry.pack(padx=15, pady=(0, 10), fill="x")
+
+    def ok(event=None):
+        result[0] = entry.get().strip()
+        win.destroy()
+
+    win.bind("<Return>", ok)
+    btn_frame = tk.Frame(frame)
+    btn_frame.pack(pady=(0, 15))
+    tk.Button(btn_frame, text="Создать", command=ok, width=10).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Отмена", command=win.destroy, width=10).pack(side="left", padx=5)
+
+    _center_window(win)
+
+    win.focus_force()
+    win.deiconify()
+    entry.focus_set()
+    win.wait_window()
+    return result[0]
+
+
 def centered_asklogin(title, message, login=""):
     """Окно ввода логина и пароля. Возвращает (логин, пароль) или None, если отказались."""
     win, frame = _create_dialog(title, message)

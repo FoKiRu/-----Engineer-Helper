@@ -29,7 +29,7 @@ from modules import dialogs
 from modules.app_updater import fetch_remote_version, is_newer_version, download_update, restart_with_update
 from modules.dialogs import _center_window, centered_info, centered_warning, centered_error
 from modules.dialogs import centered_askyesno, centered_askchecklist, centered_askchoice, centered_askselect
-from modules.dialogs import centered_asklogin, add_tooltip
+from modules.dialogs import centered_asklogin, centered_askstring, add_tooltip
 from modules.data_manager import load_data, save_data, load_settings_and_paths, get_task_data
 from modules.data_manager import save_settings_and_path as _save_recent_path
 from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
@@ -68,7 +68,7 @@ from modules.log_viewer import open_log_viewer
 from modules.feature_server import feature_server_dialog
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.1.8.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.2.0.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -2004,27 +2004,6 @@ def on_closing():
 path_task_frame = tk.LabelFrame(settings_tab, text="Путь к RK7")
 path_task_frame.pack(padx=10, pady=(10, 0), fill="x")
 
-# Фрейм для метки и кнопки "Открыть"
-label_and_open_frame = tk.Frame(path_task_frame)
-label_and_open_frame.pack(fill="x", padx=8, pady=(5, 0), ipady=0)
-
-# Левая часть: метка "Путь к RK7:" и кнопка "Открыть"
-tk.Label(
-    label_and_open_frame,
-    text="Путь к RK7:",
-    font=("TkDefaultFont", 9)
-).grid(row=0, column=0, sticky="w")
-
-# Кнопка "Открыть" (на той же строке, справа от метки)
-open_root_btn = tk.Button(
-    label_and_open_frame,
-    text="Открыть",
-    command=open_explorer_to_root,
-    font=("TkDefaultFont", 8)
-)
-open_root_btn.grid(row=0, column=1, padx=(1, 0), sticky="w")
-add_tooltip(open_root_btn, "Открыть папку задачи в проводнике (нет папки задачи — папку версии RK)")
-
 # Общий список задач для боковой панели
 task_ids = load_task_ids()
 
@@ -2347,6 +2326,24 @@ def save_task_id():
         f"Пустая папка MIDBASE создана: {midbase_path}"
     )
 
+
+def add_task():
+    task_id_var.set("")
+    task_id = centered_askstring(
+        "Новая задача",
+        "Введите название задачи.\n\n"
+        "Если указать номер задачи из SD, её можно будет открывать прямо из программы."
+    )
+    if task_id is None:
+        return
+    if not task_id:
+        centered_warning("Предупреждение", "Введите название задачи.")
+        return
+
+    task_id_var.set(task_id)
+    save_task_id()
+
+
 # load_task_ids импортирована из modules.data_manager
 
 def delete_task(confirm=True):
@@ -2484,17 +2481,14 @@ def delete_task(confirm=True):
     # centered_info("Успех", result_msg)
 
 
-# Кнопка "Сохранить"
-save_task_btn = tk.Button(
-    label_and_open_frame,
-    text="Сохранить",
-    command=save_task_id, # Функция сохранения номера здачи
+add_task_btn = tk.Button(
+    task_panel,
+    text="Добавить",
+    command=add_task,
     font=("TkDefaultFont", 8)
 )
-save_task_btn.grid(row=0, column=4, padx=(5, 0), sticky="e")
-add_tooltip(save_task_btn, "Сохранить задачу: копирует base версии в {задача}\\base, "
-                           "создаёт пустую MIDBASE, прописывает пути в INI и ярлыки")
-label_and_open_frame.grid_columnconfigure(3, weight=1)  # «Сохранить» прижата вправо: 8 px от рамки
+add_task_btn.pack(fill="x", padx=4, pady=(0, 4), before=task_list_frame)
+add_tooltip(add_task_btn, "Создать задачу из базы текущей версии по умолчанию")
 
 # Выбор пути
 path_frame = tk.Frame(path_task_frame)
@@ -2559,6 +2553,10 @@ def browse_path():
 browse_btn = tk.Button(path_frame, text="Обзор", command=browse_path, font=("TkDefaultFont", 8))
 browse_btn.pack(side="left", padx=(5, 0))
 add_tooltip(browse_btn, "Выбрать папку версии RK (bin\\win внутри неё найдётся сам)")
+
+open_root_btn = tk.Button(path_frame, text="Открыть", command=open_explorer_to_root, font=("TkDefaultFont", 8))
+open_root_btn.pack(side="left", padx=(3, 0))
+add_tooltip(open_root_btn, "Открыть папку задачи в проводнике (нет папки задачи — папку версии RK)")
 
 
 # Cинхронизация параметров из INI-файлов с приоритетом по дате изменения
