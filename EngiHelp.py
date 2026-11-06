@@ -68,7 +68,7 @@ from modules.log_viewer import open_log_viewer
 from modules.feature_server import feature_server_dialog
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.1.7.1"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v3.0.0.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -124,16 +124,10 @@ if icon_path:
    root.iconbitmap(icon_path)  # Применяем иконку к главному окну
 dialogs.init(root, icon_path)  # root и иконка для всех centered_* окон
 
-# Размеры главного окна (слева — панель со списком задач, если включена в «Настройках»)
+# Размеры главного окна (слева — панель со списком задач)
 BASE_WINDOW_WIDTH = 412
 TASK_PANEL_WIDTH = 70
-show_task_panel_var = tk.BooleanVar(value=load_data()["settings"].get("show_task_panel", True))
-
-def get_window_width():
-    """Ширина главного окна с учётом панели задач."""
-    return BASE_WINDOW_WIDTH + (TASK_PANEL_WIDTH if show_task_panel_var.get() else 0)
-
-WINDOW_WIDTH = get_window_width()
+WINDOW_WIDTH = BASE_WINDOW_WIDTH + TASK_PANEL_WIDTH
 WINDOW_HEIGHT = 540
 WINDOW_OFFSET_X = 223
 WINDOW_OFFSET_Y = 100   
@@ -185,10 +179,9 @@ else:
 
 root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
 
-# Панель задач слева (заполняется в refresh_task_panel, показ — toggle_task_panel)
+# Панель задач слева (заполняется в refresh_task_panel)
 task_panel = tk.Frame(root, width=TASK_PANEL_WIDTH)
-if show_task_panel_var.get():
-    task_panel.pack(side="left", fill="y")
+task_panel.pack(side="left", fill="y")
 task_panel.pack_propagate(False)
 tk.Label(task_panel, text="Задачи", font=("TkDefaultFont", 8, "bold")).pack(pady=(4, 2))
 # Рамка вокруг списка; отступ текста от левого края — пробелы в начале строк
@@ -927,7 +920,7 @@ def _relocate_missing_task(task_id, entry, version_key):
         messages.append(f"Настройки версии без задачи и история путей переведены на {new_root}")
 
     centered_info("Путь задачи изменён", "\n\n".join(messages))
-    task_id_combobox['values'] = load_task_ids()
+    set_task_ids(load_task_ids())
 
     # Применяем задачу уже по новым путям (нужная версия — без повторного выбора)
     def _apply():
@@ -1026,7 +1019,7 @@ def on_task_selected(event):
         sorted_tasks = {selected_task_id: selected_task_info, **tasks}
         data["tasks"] = sorted_tasks
         save_data(data)
-        task_id_combobox['values'] = [""] + list(sorted_tasks.keys())
+        set_task_ids([""] + list(sorted_tasks.keys()))
         tasks = sorted_tasks
 
     task_info = tasks[selected_task_id]
@@ -1743,7 +1736,7 @@ def apply_task_version(task_id, selected_version):
     data["tasks"] = tasks
     save_data(data)
 
-    task_id_combobox['values'] = [""] + list(tasks.keys())
+    set_task_ids([""] + list(tasks.keys()))
 
     path_var.set(version_info["ini_path"])
     apply_path_silent()
@@ -1874,7 +1867,7 @@ def show_task_selection_dialog(version_path, task_list, fallback_task_id=None):
         success, message = create_task_for_version(new_task_id, version_path)
         if success:
             # Обновляем список задач в диалоге
-            task_id_combobox['values'] = load_task_ids()
+            set_task_ids(load_task_ids())
             select_win.destroy()
             # Загружаем созданную задачу с уже выбранной версией
             _load_task(new_task_id)
@@ -1890,7 +1883,7 @@ def show_task_selection_dialog(version_path, task_list, fallback_task_id=None):
         # чтобы on_task_selected не спрашивал версию повторно.
         _forced_version = version_key
 
-        task_id_combobox['values'] = load_task_ids()
+        set_task_ids(load_task_ids())
         if task_id_var.get().strip() == selected_tid:
             # trace не сработает — применяем настройки напрямую
             on_task_selected(None)
@@ -2007,11 +2000,11 @@ def on_closing():
     root.destroy()
 # ======================= КОНЕЦ ПОДДЕРЖКИ КОПИРОВАНИЯ =======================
 
-# Группа: путь к RK7 и задача
-path_task_frame = tk.LabelFrame(settings_tab, text="Путь и задача")
+# Группа: путь к RK7
+path_task_frame = tk.LabelFrame(settings_tab, text="Путь к RK7")
 path_task_frame.pack(padx=10, pady=(10, 0), fill="x")
 
-# Фрейм для метки, кнопки "Открыть" и поля для номера задачи
+# Фрейм для метки и кнопки "Открыть"
 label_and_open_frame = tk.Frame(path_task_frame)
 label_and_open_frame.pack(fill="x", padx=8, pady=(5, 0), ipady=0)
 
@@ -2032,58 +2025,17 @@ open_root_btn = tk.Button(
 open_root_btn.grid(row=0, column=1, padx=(1, 0), sticky="w")
 add_tooltip(open_root_btn, "Открыть папку задачи в проводнике (нет папки задачи — папку версии RK)")
 
+# Общий список задач для боковой панели
+task_ids = load_task_ids()
 
-# Фрейм для метки и комбобокса
-task_id_frame = tk.Frame(label_and_open_frame)
-task_id_frame.grid(row=0, column=2, columnspan=2, padx=(9, 0), sticky="w")
+def set_task_ids(values):
+    task_ids[:] = values
 
-tk.Label(
-    task_id_frame,
-    text="Номер задачи:",
-    font=("TkDefaultFont", 9)
-).pack(side="left")
-
-# Combobox для номера задачи
-#task_id_var = tk.StringVar() # создается ранее в коде
-task_id_combobox = ttk.Combobox(
-    task_id_frame,
-    textvariable=task_id_var,
-    width=7,
-    font=("TkDefaultFont", 9)
-)
-task_id_combobox.pack(side="left", padx=(1, 0))
-# trace_add на task_id_var заменяет <<ComboboxSelected>> — работает и при смене, и при выборе той же задачи
-
-def _on_click(event):
-    # Стрелка находится в правой части, проверяем координату x
-    widget_width = task_id_combobox.winfo_width()
-    #print(f"[DEBUG] клик x={event.x}, ширина виджета={widget_width}")
-    if event.x > widget_width - 20:  # клик по стрелке
-        #print("[DEBUG] клик по СТРЕЛКЕ")
-        def _scroll_to_top():
-            try:
-                task_id_combobox.tk.eval(f'set popdown [ttk::combobox::PopdownWindow {task_id_combobox}]; $popdown.f.l yview moveto 0')
-                #print("[DEBUG] scroll выполнен")
-            except Exception as e:
-                print(f"[DEBUG] Ошибка: {e}")
-        task_id_combobox.after(50, _scroll_to_top)
-
-task_id_combobox.bind("<ButtonPress-1>", _on_click)
-
-# --- Инициализация значений при первом запуске ---
-_initial_task_values = [""] + list(load_data().get("tasks", {}).keys())
-task_id_combobox['values'] = _initial_task_values
 _current_task = task_id_var.get().strip()
-if _current_task and _current_task in _initial_task_values:
-    # Задача из INI есть в списке — показываем её
-    task_id_combobox.current(_initial_task_values.index(_current_task))
-elif len(_initial_task_values) > 1:
-    # Задачи в JSON есть — показываем первую реальную (индекс 1, после пустой строки)
-    task_id_combobox.current(1)
-    task_id_var.set(_initial_task_values[1])
-else:
-    # Задач нет вообще — показываем пустую строку
-    task_id_combobox.current(0)
+if not _current_task and len(task_ids) > 1:
+    task_id_var.set(task_ids[1])
+elif not _current_task:
+    task_id_var.set("")
 
 def _on_task_id_change(*_):
     """Callback для trace_add — вызывается при любом изменении task_id_var."""
@@ -2102,14 +2054,11 @@ task_id_var.trace_add("write", _on_task_id_change)
 _task_panel_state = None  # (задачи, задачи версии, выбранная) — перерисовываем только при изменениях
 
 def refresh_task_panel():
-    """Список задач на панели слева в том же порядке, что в «Номер задачи».
-    Задачи текущей версии — обычным цветом, остальных версий — серым,
+    """Задачи текущей версии — обычным цветом, остальных версий — серым,
     задачи, папки которых не найдены на диске, — красным, задачи, у которых нет папок
     только части версий, — оранжевым; выбранная выделена."""
     global _task_panel_state
-    if not show_task_panel_var.get():
-        return
-    tasks = [str(t) for t in task_id_combobox['values'] if str(t)]
+    tasks = [str(t) for t in task_ids if str(t)]
     version_tasks = set(find_tasks_for_path(ini_path)) if ini_path else set()
     all_tasks = load_data().get("tasks", {})
     missing_tasks = {t for t in tasks if t in all_tasks and not task_folder_exists(all_tasks[t])}
@@ -2137,7 +2086,7 @@ def refresh_task_panel():
         task_listbox.see(index)
 
 def _on_task_panel_select(event):
-    """Клик по задаче на панели — выбор задачи, как в списке «Номер задачи»."""
+    """Клик по задаче на панели выбирает её."""
     selection = task_listbox.curselection()
     if not selection:
         return
@@ -2147,22 +2096,10 @@ def _on_task_panel_select(event):
 task_listbox.bind("<<ListboxSelect>>", _on_task_panel_select)
 refresh_task_panel()
 
-def toggle_task_panel():
-    """Показывает или скрывает панель задач и меняет ширину окна (позиция окна сохраняется)."""
-    global _task_panel_state
-    if show_task_panel_var.get():
-        task_panel.pack(side="left", fill="y", before=notebook)
-        _task_panel_state = None  # пока панель была скрыта, список не обновлялся
-        refresh_task_panel()
-    else:
-        task_panel.pack_forget()
-    root.geometry(f"{get_window_width()}x{WINDOW_HEIGHT}")
-    save_prefs_flags()
-
 def save_task_id_to_file():
     task_id = task_id_var.get().strip()
     if not task_id:
-        return  # Если поле пустое, ничего не сохраняем
+        return  # Если задача не выбрана, ничего не сохраняем
 
     product_root = find_product_root(path_var.get())
     if not product_root:
@@ -2260,7 +2197,7 @@ def sync_default_settings_if_no_task():
 def save_task_id():
     task_id = task_id_var.get().strip()
     if not task_id:
-        centered_warning("Предупреждение", "Поле 'Номер задачи' пустое!")
+        centered_warning("Предупреждение", "Сначала выберите задачу на боковой панели.")
         return
 
     product_root = find_product_root(path_var.get())
@@ -2393,8 +2330,8 @@ def save_task_id():
     data["tasks"] = tasks
     save_data(data)
 
-    task_id_combobox['values'] = load_task_ids()
-    task_id_combobox.current(1)  # Всегда показывать пустую строку первой при открытии
+    set_task_ids(load_task_ids())
+    task_id_var.set(task_id)
 
     # Обновляем rk7srv.INI: передаём путь {task_id}\base
     base_dir = os.path.join(task_id, "base")
@@ -2534,8 +2471,7 @@ def delete_task(confirm=True):
     save_data(data)
 
     # === Шаг 3: Обновляем интерфейс ===
-    task_id_combobox['values'] = load_task_ids()
-    task_id_combobox.current(0)  # Выбираем пустую строку
+    set_task_ids(load_task_ids())
     task_id_var.set("")
 
     # Формируем итоговое сообщение
@@ -2719,7 +2655,7 @@ def apply_path(event=None, update_task=True): # Добавлен парамет�
         # Если включён и для версии есть несколько задач — предлагаем выбрать задачу
         if task_from_version_var.get():
             if len(path_tasks) > 1:
-                task_id_combobox['values'] = load_task_ids()
+                set_task_ids(load_task_ids())
                 show_task_selection_dialog(ini_path, path_tasks, latest_task_id)
                 return
 
@@ -2749,8 +2685,7 @@ def apply_path(event=None, update_task=True): # Добавлен парамет�
         on_check()
     # --- КОНЕЦ ЛОГИКИ ---
     
-    task_id_combobox['values'] = load_task_ids()
-    #task_id_combobox.current(0)  # Всегда показывать пустую строку первой при открытии
+    set_task_ids(load_task_ids())
 
 path_entry.bind("<<ComboboxSelected>>", apply_path) # Обновление после выбора пути из списка
 
@@ -3894,8 +3829,7 @@ def load_wincash_params():
             station_var.set(line.strip().split("=", 1)[-1])
         elif line.strip().lower().startswith("server ="):
             server_var.set(line.strip().split("=", 1)[-1])
-    task_id_combobox["values"] = load_task_ids()
-    #task_id_combobox.current(0)
+    set_task_ids(load_task_ids())
 
 def load_refserver_params(ini_path_val=None):
     """Читает имя REFSERVER из rk7srv.INI [REFSERVER] Server = ..."""
@@ -4947,7 +4881,6 @@ def save_prefs_flags(*_):
     data["settings"]["task_from_version"] = task_from_version_var.get()
     data["settings"]["keep_cloud_files"] = keep_cloud_files_var.get()
     data["settings"]["delete_zip_after_extract"] = delete_zip_after_extract_var.get()
-    data["settings"]["show_task_panel"] = show_task_panel_var.get()
     data["settings"]["clean_backups"] = clean_backups_var.get()
     data["settings"]["backups_keep"] = get_backups_keep()
     save_data(data)
@@ -5014,24 +4947,6 @@ delete_zip_desc_label = tk.Label(
     anchor="w"
 )
 delete_zip_desc_label.pack(padx=(30, 10), pady=(0, 10), anchor="w", fill="x")
-
-tk.Checkbutton(
-    prefs_tab,
-    text="Показывать панель задач",
-    variable=show_task_panel_var,
-    command=toggle_task_panel
-).pack(padx=10, pady=(5, 2), anchor="w")
-
-task_panel_desc_label = tk.Label(
-    prefs_tab,
-    text="Список задач слева от вкладок. Клик по задаче выбирает её; задачи других версий — серым.",
-    justify="left",
-    fg="gray40",
-    font=("TkDefaultFont", 8),
-    wraplength=350,
-    anchor="w"
-)
-task_panel_desc_label.pack(padx=(30, 10), pady=(0, 10), anchor="w", fill="x")
 
 # --- Старые бэкапы базы ---
 def get_backups_keep():

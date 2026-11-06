@@ -10,6 +10,7 @@ from .data_manager import load_data, save_data
 from .dialogs import _center_window, centered_askyesno, centered_error, centered_info, centered_warning
 from .process_utils import get_process_by_name
 from .shortcuts import create_lnk
+from .sql_database import SqlDatabaseError, create_database, database_exists
 
 
 class FeatureServerError(Exception):
@@ -262,6 +263,11 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
     tk.Label(sql_frame, text="Имя базы:").grid(row=2, column=0, sticky="w", padx=6, pady=2)
     sql_database_entry = tk.Entry(sql_frame, textvariable=sql_database_var, width=38)
     sql_database_entry.grid(row=2, column=1, sticky="ew", padx=(0, 6), pady=2)
+    create_db_btn = tk.Button(
+        sql_frame, text="Создать БД", state="disabled", width=12,
+        command=lambda: on_create_database()
+    )
+    create_db_btn.grid(row=2, column=2, padx=(0, 6))
     auth_check = tk.Checkbutton(sql_frame, text="Проверка подлинности Windows", variable=windows_auth_var)
     auth_check.grid(row=3, column=0, columnspan=2, sticky="w", padx=6, pady=2)
     tk.Label(sql_frame, text="Пользователь:").grid(row=4, column=0, sticky="w", padx=6, pady=2)
@@ -277,16 +283,18 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
     ).grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=(2, 5))
 
     def update_sql_state():
-        sql_state = "normal" if sql_enabled_var.get() else "disabled"
+        sql_active = sql_enabled_var.get() and not state["busy"]
+        sql_state = "normal" if sql_active else "disabled"
         for widget in (sql_server_entry, sql_database_entry, auth_check):
             widget.config(state=sql_state)
-        auth_state = "disabled" if not sql_enabled_var.get() or windows_auth_var.get() else "normal"
+        auth_state = "normal" if sql_active and not windows_auth_var.get() else "disabled"
         username_entry.config(state=auth_state)
         password_entry.config(state=auth_state)
+        create_state = "normal" if sql_active and state["database_missing"] else "disabled"
+        create_db_btn.config(state=create_state)
 
     sql_check.config(command=update_sql_state)
     auth_check.config(command=update_sql_state)
-    update_sql_state()
 
     advanced_frame = tk.LabelFrame(frame, text="Адреса сервисов")
     cs_url_var = tk.StringVar(value=saved.get("cs_url", "http://127.0.0.1:7007/soap/UCSCommonWS"))
@@ -332,15 +340,16 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
             log_text.config(state="disabled")
         root.after(0, update)
 
-    state = {"busy": False}
+    state = {"busy": False, "database_missing": False}
 
-    def set_busy(busy):
+    def set_busy(busy, status="Установка..."):
         state["busy"] = busy
         install_btn.config(state="disabled" if busy else "normal")
         cancel_btn.config(state="disabled" if busy else "normal")
+        update_sql_state()
         if busy:
             progress.start(12)
-            status_var.set("Установка...")
+            status_var.set(status)
         else:
             progress.stop()
 
@@ -350,7 +359,50 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
 
     win.protocol("WM_DELETE_WINDOW", on_close)
 
-    def on_install():
+    def on_create_database():
+        server = sql_server_var.get().strip()
+        database = sql_database_var.get().strip()
+        windows_auth = windows_auth_var.get()
+        username = username_var.get().strip()
+        password = password_var.get()
+
+        if not server or not database:
+            centered_warning("Установка Feature Server", "Укажите адрес SQL Server и имя базы данных.")
+            return
+        if not windows_auth and (not username or not password):
+            centered_warning("Установка Feature Server", "Укажите пользователя и пароль SQL Server.")
+            return
+
+        set_busy(True, "Создание базы данных...")
+
+        def job():
+            try:
+                created_name = create_database(server, database, windows_auth, username, password)
+            except SqlDatabaseError as e:
+                def show_error(error_message=str(e)):
+                    if not win.winfo_exists():
+                        return
+                    set_busy(False)
+                    status_var.set("Ошибка создания базы данных")
+                    centered_error("Установка Feature Server", error_message)
+                root.after(0, show_error)
+                return
+
+            def show_success():
+                if not win.winfo_exists():
+                    return
+                state["database_missing"] = False
+                set_busy(False)
+                status_var.set("База данных создана")
+                centered_info(
+                    "Установка Feature Server",
+                    f"База данных {created_name} успешно создана.\nТеперь можно продолжить установку."
+                )
+            root.after(0, show_success)
+
+        threading.Thread(target=job, daemon=True).start()
+
+    def on_install(database_checked=False):
         version = version_var.get().strip().lower()
         install_path = os.path.normpath(os.path.abspath(install_path_var.get().strip()))
         cache_path = cache_path_var.get().strip()
@@ -374,6 +426,48 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
             return
         if sql_enabled and not windows_auth and (not username_var.get().strip() or not password_var.get()):
             centered_warning("Установка Feature Server", "Укажите пользователя и пароль SQL Server.")
+            return
+
+        if sql_enabled and not database_checked:
+            server = sql_server_var.get().strip()
+            database = sql_database_var.get().strip()
+            username = username_var.get().strip()
+            password = password_var.get()
+            state["database_missing"] = False
+            set_busy(True, "Проверка базы данных...")
+
+            def check_job():
+                try:
+                    exists = database_exists(server, database, windows_auth, username, password)
+                except SqlDatabaseError as e:
+                    def show_error(error_message=str(e)):
+                        if not win.winfo_exists():
+                            return
+                        set_busy(False)
+                        status_var.set("Ошибка проверки базы данных")
+                        centered_error("Установка Feature Server", error_message)
+                    root.after(0, show_error)
+                    return
+
+                def show_result():
+                    if not win.winfo_exists():
+                        return
+                    set_busy(False)
+                    if exists:
+                        on_install(database_checked=True)
+                        return
+                    state["database_missing"] = True
+                    update_sql_state()
+                    status_var.set("База данных не найдена")
+                    append_log(f"База данных не найдена: {database}")
+                    centered_warning(
+                        "Установка Feature Server",
+                        f"Базы данных «{database}» нет в списке баз на SQL Server.\n"
+                        "Нажмите «Создать БД», чтобы создать её, или укажите другое имя."
+                    )
+                root.after(0, show_result)
+
+            threading.Thread(target=check_job, daemon=True).start()
             return
 
         for process, process_dir in get_process_by_name("IRReportsFSPrj.exe"):
@@ -477,6 +571,7 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
     cancel_btn = tk.Button(buttons, text="Закрыть", command=on_close, width=12)
     cancel_btn.pack(side="left", padx=5)
 
+    update_sql_state()
     _center_window(win, max_width=680, min_width=560)
     win.focus_force()
     win.deiconify()
