@@ -1,3 +1,4 @@
+0
 # Python
 __pycache__/
 *.pyc
@@ -34,3 +35,36 @@ format_visits.py
 Скрипт для исправление визитов с предоплатами.py
 cloud_html.txt
 AGENTS.md
+deploy-stands/check-db-rk7-README.md
+.gitignore
+deploy-stands/check-db-rk7.ps1
+deploy-stands/del-stends-rk7.ps1
+deploy-stands/remove-stand/remove-stand-rk7.psm1
+.gitignore
+deploy-stands/remove-stand/verify-module.ps1
+deploy-stands/remove-stand/uninstall.ps1
+deploy-stands/remove-stand/Remove-Stand-RK7.psd1
+deploy-stands/remove-stand/README.md
+deploy-stands/remove-stand/install.ps1
+deploy-stands/remove-stand/check-syntax.ps1
+deploy-stands/get-rk7s/uninstall.ps1
+deploy-stands/get-rk7s/README.md
+deploy-stands/get-ir/README.md
+deploy-stands/get-ir/uninstall.ps1
+deploy-stands/get-rk7s/get-rk7s.psd1
+deploy-stands/get-rk7s/get-rk7s.psm1
+deploy-stands/get-rk7s/install.ps1
+deploy-stands/deploy-rk7_2.log
+deploy-stands/deploy-rk7.log
+deploy-stands/deploy-rk7.ps1
+deploy-stands/get-stend-ir-rk7_ms2019.ps1
+deploy-stands/get-stend-ir-rk7_ms2022.ps1
+deploy-stands/get-stend-ir-rk7.ps1
+deploy-stands/get-stend-rk7.ps1
+deploy-stands/README.md
+deploy-stands/rk7ToSQL.xml
+deploy-stands/stend-common.ps1
+deploy-stands/docs/utils-api-tz.md
+deploy-stands/docs/ТЗ API подготовки rk7.udb.md
+deploy-stands/get-ir/get-ir.psm1
+deploy-stands/get-ir/install.ps1
