@@ -65,10 +65,12 @@ from modules.udb_api import result_file as udb_result_file
 from modules.changelog import CHANGELOG
 from modules.sql_database import create_database as create_sql_database, SqlDatabaseError
 from modules.log_viewer import open_log_viewer
-from modules.feature_server import feature_server_dialog
+from modules.feature_server import feature_server_dialog, FeatureServerError
+from modules.feature_server import launch_feature_services, prepare_schrep_plugin, restore_schrep_plugin
+from modules.feature_server import set_schrep_guid
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.3.0.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.4.0.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -3194,9 +3196,46 @@ def _rename_refserver(new_name):
     else:
         sync_default_settings_if_no_task()
 
+def _restore_schrep_plugin_after_launch(ini_path_norm, plugin_paths, before_pids, attempts=40):
+    started = any(
+        exe_dir == ini_path_norm and proc.pid not in before_pids
+        for proc, exe_dir in get_process_by_name('rk7man.exe')
+    )
+    if not started and attempts > 0:
+        root.after(250, lambda: _restore_schrep_plugin_after_launch(
+            ini_path_norm, plugin_paths, before_pids, attempts - 1
+        ))
+        return
+    try:
+        restore_schrep_plugin(*plugin_paths)
+    except OSError as e:
+        centered_error("SchRepPluginClient", f"Не удалось восстановить имя INI после запуска RK7man:\n{e}")
+
+
 def start_rk7man_only():
-    """Запускает rk7man.bat из текущей директории, закрывая только свой экземпляр."""
+    """Запускает rk7man.bat с настроенными для задачи FS, CS и плагином SchRep."""
     ini_path_norm = os.path.normpath(ini_path).lower()
+    bat_path = os.path.join(ini_path, "rk7man.bat")
+    if not os.path.isfile(bat_path):
+        centered_error("Ошибка", f"Файл не найден:\n{bat_path}")
+        return
+
+    task_id = task_id_var.get().strip()
+    task_info = get_task_data(task_id) or {}
+    launch_with_services = bool(task_info.get("run_fs_cs_with_rk7man", False))
+    if launch_with_services and task_info.get("schrep_fs_guid"):
+        try:
+            set_schrep_guid(ini_path, task_info["schrep_fs_guid"])
+        except (FeatureServerError, OSError) as e:
+            centered_error("SchRepPluginClient", str(e))
+            return
+    if launch_with_services and not launch_feature_services(task_id, task_info, root):
+        return
+    try:
+        plugin_paths = prepare_schrep_plugin(ini_path, launch_with_services)
+    except (FeatureServerError, OSError) as e:
+        centered_error("SchRepPluginClient", str(e))
+        return
 
     # Закрываем только rk7man из текущей директории
     for proc, exe_dir in get_process_by_name('rk7man.exe'):
@@ -3207,15 +3246,21 @@ def start_rk7man_only():
                 pass
 
     time.sleep(0.5)
-
-    bat_path = os.path.join(ini_path, "rk7man.bat")
-    if not os.path.isfile(bat_path):
-        centered_error("Ошибка", f"Файл не найден:\n{bat_path}")
-        return
+    before_pids = {proc.pid for proc, _ in get_process_by_name('rk7man.exe')}
     try:
         subprocess.Popen(f'start "" cmd /c "{bat_path}"', shell=True, cwd=ini_path)
     except Exception as e:
+        if plugin_paths:
+            try:
+                restore_schrep_plugin(*plugin_paths)
+            except OSError as restore_error:
+                centered_error("SchRepPluginClient", f"Не удалось восстановить имя INI:\n{restore_error}")
         centered_error("Ошибка запуска", str(e))
+        return
+    if plugin_paths:
+        root.after(250, lambda: _restore_schrep_plugin_after_launch(
+            ini_path_norm, plugin_paths, before_pids
+        ))
 
 # ======================= Запуск wincash.bat =======================
 # (функция run_wincash_bat удалена - использовалась start_wincash_only)

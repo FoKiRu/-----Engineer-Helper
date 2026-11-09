@@ -95,3 +95,29 @@ $Shortcut.Save()
             print(f"[WARN] PowerShell error: {result.stderr}")
     except Exception as e:
         print(f"[WARN] create_lnk failed: {e}")
+
+
+def minimize_lnk(lnk_path):
+    """Настраивает запуск существующего ярлыка в свёрнутом окне."""
+    if not os.path.isfile(lnk_path):
+        return False
+    try:
+        ps_script = f'''
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut("{lnk_path}")
+$Shortcut.WindowStyle = 7
+$Shortcut.Save()
+'''
+        result = subprocess.run(
+            ["powershell", "-WindowStyle", "Hidden", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+        )
+        if result.returncode != 0:
+            print(f"[WARN] PowerShell error: {result.stderr}")
+        return result.returncode == 0
+    except Exception as e:
+        print(f"[WARN] minimize_lnk failed: {e}")
+        return False

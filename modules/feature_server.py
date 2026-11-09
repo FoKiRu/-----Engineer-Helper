@@ -1,5 +1,8 @@
+import base64
+import ctypes
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -9,7 +12,7 @@ from tkinter import filedialog, ttk
 from .data_manager import load_data, save_data
 from .dialogs import _center_window, centered_askyesno, centered_error, centered_info, centered_warning
 from .process_utils import get_process_by_name
-from .shortcuts import create_lnk
+from .shortcuts import create_lnk, minimize_lnk
 from .sql_database import SqlDatabaseError, create_database, database_exists
 
 
@@ -91,8 +94,8 @@ def install_feature_server(options, log_callback=None):
         "ENGIHELP_FS_INSTALL_PATH": options["install_path"],
         "ENGIHELP_FS_CACHE_PATH": options.get("cache_path", ""),
         "ENGIHELP_FS_SERVER": options.get("server", "web"),
-        "ENGIHELP_FS_INSTALL_PLUGINS": "1" if options.get("install_plugins") else "0",
-        "ENGIHELP_FS_RK7MAN_PATH": options.get("rk7man_path", ""),
+        "ENGIHELP_FS_INSTALL_PLUGINS": "1",
+        "ENGIHELP_FS_RK7MAN_PATH": options["rk7man_path"],
         "ENGIHELP_FS_CS_URL": options.get("cs_url", ""),
         "ENGIHELP_FS_FS_URL": options.get("fs_url", ""),
         "ENGIHELP_FS_SQL_ENABLED": "1" if options.get("sql_enabled") else "0",
@@ -142,11 +145,10 @@ def install_feature_server(options, log_callback=None):
     required_files = [
         os.path.join(install_path, "IRReportsFSPrj.exe"),
         os.path.join(install_path, "IRReportsFSPrj.ini"),
-    ]
-    if options.get("install_plugins"):
-        required_files.append(os.path.join(
+        os.path.join(
             options["rk7man_path"], "plugins", "SchRepPluginClient", "SchRepPluginClient.ini"
-        ))
+        ),
+    ]
     missing = [path for path in required_files if not os.path.isfile(path)]
     if missing:
         raise FeatureServerError("Установка завершилась не полностью. Не найдены файлы:\n" + "\n".join(missing))
@@ -159,6 +161,204 @@ def install_feature_server(options, log_callback=None):
 
 def _same_path(left, right):
     return os.path.normcase(os.path.normpath(left)) == os.path.normcase(os.path.normpath(right))
+
+
+def _start_as_admin(path, arguments=None, show_command=6):
+    result = ctypes.windll.shell32.ShellExecuteW(
+        None, "runas", path, arguments, os.path.dirname(path), show_command
+    )
+    if result <= 32:
+        raise FeatureServerError(f"Не удалось запустить от администратора:\n{path}\nКод ошибки: {result}")
+
+
+def _fs_launch_script(fs_shortcut):
+    shortcut_path = fs_shortcut.replace("'", "''")
+    return f"""
+$ErrorActionPreference = 'Stop'
+$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut('{shortcut_path}')
+$targetPath = $shortcut.TargetPath
+$workingDirectory = $shortcut.WorkingDirectory
+if (-not $workingDirectory) {{ $workingDirectory = Split-Path $targetPath }}
+Start-Process -FilePath $targetPath -ArgumentList $shortcut.Arguments -WorkingDirectory $workingDirectory -WindowStyle Minimized
+Add-Type -Namespace EngiHelp -Name Window -MemberDefinition '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'
+for ($attempt = 0; $attempt -lt 40; $attempt++) {{
+    Start-Sleep -Milliseconds 250
+    $minimized = $false
+    foreach ($process in @(Get-Process -Name 'IRReportsFSPrj' -ErrorAction SilentlyContinue)) {{
+        try {{
+            if ($process.Path -ne $targetPath) {{ continue }}
+            $handle = $process.MainWindowHandle
+            if ($handle -ne 0) {{
+                [EngiHelp.Window]::ShowWindow($handle, 6)
+                $minimized = $true
+            }}
+        }} catch {{}}
+    }}
+    if ($minimized) {{ break }}
+}}
+"""
+
+
+def _start_fs_as_admin(fs_shortcut):
+    encoded_script = base64.b64encode(_fs_launch_script(fs_shortcut).encode("utf-16le")).decode("ascii")
+    powershell_path = os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"),
+        "System32", "WindowsPowerShell", "v1.0", "powershell.exe",
+    )
+    _start_as_admin(
+        powershell_path,
+        f"-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand {encoded_script}",
+        0,
+    )
+
+
+def _find_cs_service(saved_path=""):
+    if saved_path and os.path.isfile(saved_path):
+        return os.path.normpath(saved_path)
+    default_dir = r"C:\Program Files (x86)\UCS\CommonServer\default"
+    for filename in ("CS_Service.exe.lnk", "CS_Service.lnk", "CS_Service.exe"):
+        path = os.path.join(default_dir, filename)
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def _resolve_cs_service(saved_path, parent, initial_dir):
+    cs_path = _find_cs_service(saved_path)
+    if cs_path:
+        return cs_path
+    default_dir = r"C:\Program Files (x86)\UCS\CommonServer\default"
+    selected = filedialog.askopenfilename(
+        parent=parent,
+        title="Выберите CS_Service.exe или его ярлык",
+        initialdir=default_dir if os.path.isdir(default_dir) else initial_dir,
+        filetypes=[("Common Server", "CS_Service.exe CS_Service*.lnk"), ("Все файлы", "*.*")],
+    )
+    return os.path.normpath(selected) if selected else ""
+
+
+def _create_cs_shortcut(task_folder, cs_path):
+    shortcut_path = os.path.join(task_folder, "CS.lnk")
+    if os.path.isfile(shortcut_path):
+        return shortcut_path
+    if cs_path.lower().endswith(".lnk"):
+        shutil.copy2(cs_path, shortcut_path)
+    else:
+        create_lnk(shortcut_path, cs_path, "")
+    if not os.path.isfile(shortcut_path):
+        raise FeatureServerError(f"Не удалось создать ярлык Common Server:\n{shortcut_path}")
+    return shortcut_path
+
+
+def launch_feature_services(task_id, task_info, parent):
+    task_folder = os.path.dirname(os.path.normpath(task_info.get("base_path", "")))
+    fs_shortcut = os.path.join(task_folder, "FS.lnk")
+    cs_shortcut = os.path.join(task_folder, "CS.lnk")
+    if not os.path.isfile(fs_shortcut):
+        centered_error("Запуск FS и CS", f"Ярлык Feature Server не найден:\n{fs_shortcut}")
+        return False
+
+    cs_path = task_info.get("cs_service_path", "")
+    try:
+        if not os.path.isfile(cs_shortcut):
+            cs_path = _resolve_cs_service(cs_path, parent, task_folder)
+            if not cs_path:
+                return False
+            _create_cs_shortcut(task_folder, cs_path)
+        if not minimize_lnk(fs_shortcut):
+            raise FeatureServerError(f"Не удалось настроить свёрнутый запуск FS:\n{fs_shortcut}")
+        _start_fs_as_admin(fs_shortcut)
+        _start_as_admin(cs_shortcut)
+    except (FeatureServerError, OSError) as e:
+        centered_error("Запуск FS и CS", str(e))
+        return False
+
+    data = load_data()
+    current_task = data.get("tasks", {}).get(task_id)
+    if current_task is not None and cs_path:
+        current_task["cs_service_path"] = cs_path
+        save_data(data)
+    return True
+
+
+def prepare_schrep_plugin(ini_path, launch_with_services):
+    plugin_dir = os.path.join(ini_path, "plugins", "SchRepPluginClient")
+    active_path = os.path.join(plugin_dir, "SchRepPluginClient.ini")
+    disabled_path = os.path.join(plugin_dir, "#SchRepPluginClient.ini")
+
+    if launch_with_services:
+        if not os.path.exists(active_path) and os.path.isfile(disabled_path):
+            os.rename(disabled_path, active_path)
+        return None
+
+    if os.path.isfile(active_path):
+        if os.path.exists(disabled_path):
+            raise FeatureServerError(
+                "Найдены одновременно SchRepPluginClient.ini и #SchRepPluginClient.ini.\n"
+                "Оставьте только один файл перед запуском RK7man."
+            )
+        os.rename(active_path, disabled_path)
+        return disabled_path, active_path
+    return None
+
+
+def restore_schrep_plugin(disabled_path, active_path):
+    if os.path.isfile(disabled_path) and not os.path.exists(active_path):
+        os.rename(disabled_path, active_path)
+
+
+def _schrep_ini_path(ini_path):
+    plugin_dir = os.path.join(ini_path, "plugins", "SchRepPluginClient")
+    for filename in ("SchRepPluginClient.ini", "#SchRepPluginClient.ini"):
+        path = os.path.join(plugin_dir, filename)
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def read_schrep_guid(ini_path):
+    path = _schrep_ini_path(ini_path)
+    if not path:
+        return ""
+    with open(path, "rb") as ini_file:
+        content = ini_file.read()
+    section = re.search(
+        rb"(?ims)^[ \t]*\[CS_CONNECTION\][^\r\n]*\r?\n(.*?)(?=^[ \t]*\[|\Z)",
+        content,
+    )
+    if not section:
+        return ""
+    guid = re.search(
+        rb"(?im)^[ \t]*fs_guid[ \t]*=[ \t]*(\{[^}\r\n]+\})",
+        section.group(1),
+    )
+    return guid.group(1).decode("ascii") if guid else ""
+
+
+def set_schrep_guid(ini_path, guid):
+    path = _schrep_ini_path(ini_path)
+    if not path:
+        raise FeatureServerError("Файл SchRepPluginClient.ini не найден.")
+    with open(path, "rb") as ini_file:
+        content = ini_file.read()
+    section = re.search(
+        rb"(?ims)^[ \t]*\[CS_CONNECTION\][^\r\n]*\r?\n(.*?)(?=^[ \t]*\[|\Z)",
+        content,
+    )
+    if not section:
+        raise FeatureServerError("В SchRepPluginClient.ini не найдена секция [CS_CONNECTION].")
+    replacement = guid.encode("ascii")
+    new_section, count = re.subn(
+        rb"(?im)^([ \t]*fs_guid[ \t]*=[ \t]*)\{[^}\r\n]*\}",
+        lambda match: match.group(1) + replacement,
+        section.group(1),
+        count=1,
+    )
+    if count != 1:
+        raise FeatureServerError("В секции [CS_CONNECTION] не найден параметр fs_guid.")
+    content = content[:section.start(1)] + new_section + content[section.end(1):]
+    with open(path, "wb") as ini_file:
+        ini_file.write(content)
 
 
 def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
@@ -196,7 +396,8 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
     install_path_var = tk.StringVar(value=os.path.join(task_folder, "featureserver") if task_folder else "")
     cache_path_var = tk.StringVar(value=saved.get("cache_path", ""))
     server_var = tk.StringVar(value=saved.get("server", "web"))
-    plugins_var = tk.BooleanVar(value=saved.get("install_plugins", True))
+    task_info = data.get("tasks", {}).get(task_id, {})
+    launch_services_var = tk.BooleanVar(value=task_info.get("run_fs_cs_with_rk7man", False))
 
     tk.Label(distribution, text="Версия IR:").grid(row=0, column=0, sticky="w", padx=6, pady=3)
     tk.Entry(distribution, textvariable=version_var, width=18).grid(row=0, column=1, sticky="w", pady=3)
@@ -239,7 +440,7 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
         distribution, textvariable=server_var, values=("web", "new"), state="readonly", width=15
     ).grid(row=3, column=1, sticky="w", pady=3)
     tk.Checkbutton(
-        distribution, text="Установить плагины в текущий RK7man", variable=plugins_var
+        distribution, text="Запускать FS, CS вместе с RK7man", variable=launch_services_var
     ).grid(row=4, column=0, columnspan=4, sticky="w", padx=6, pady=(2, 5))
 
     sql_frame = tk.LabelFrame(frame, text="База данных")
@@ -340,7 +541,11 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
             log_text.config(state="disabled")
         root.after(0, update)
 
-    state = {"busy": False, "database_missing": False}
+    state = {
+        "busy": False,
+        "database_missing": False,
+        "cs_path": task_info.get("cs_service_path", ""),
+    }
 
     def set_busy(busy, status="Установка..."):
         state["busy"] = busy
@@ -418,7 +623,7 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
         if _same_path(install_path, ini_path):
             centered_warning("Установка Feature Server", "Feature Server нельзя устанавливать в папку bin\\win.")
             return
-        if plugins_var.get() and not os.path.isfile(os.path.join(ini_path, "rk7man.exe")):
+        if not os.path.isfile(os.path.join(ini_path, "rk7man.exe")):
             centered_warning("Установка Feature Server", "В текущей папке bin\\win не найден rk7man.exe.")
             return
         if sql_enabled and (not sql_server_var.get().strip() or not sql_database_var.get().strip()):
@@ -426,6 +631,9 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
             return
         if sql_enabled and not windows_auth and (not username_var.get().strip() or not password_var.get()):
             centered_warning("Установка Feature Server", "Укажите пользователя и пароль SQL Server.")
+            return
+        state["cs_path"] = _resolve_cs_service(state["cs_path"], win, task_folder)
+        if not state["cs_path"]:
             return
 
         if sql_enabled and not database_checked:
@@ -477,14 +685,13 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
                     "Feature Server запущен из выбранной папки. Закройте его и повторите установку."
                 )
                 return
-        if plugins_var.get():
-            for process, process_dir in get_process_by_name("rk7man.exe"):
-                if _same_path(process_dir, ini_path):
-                    centered_warning(
-                        "Установка Feature Server",
-                        "RK7man текущей версии запущен. Закройте его перед обновлением плагинов."
-                    )
-                    return
+        for process, process_dir in get_process_by_name("rk7man.exe"):
+            if _same_path(process_dir, ini_path):
+                centered_warning(
+                    "Установка Feature Server",
+                    "RK7man текущей версии запущен. Закройте его перед обновлением плагинов."
+                )
+                return
 
         if os.path.isdir(install_path) and os.listdir(install_path):
             if not centered_askyesno(
@@ -499,8 +706,8 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
             "install_path": install_path,
             "cache_path": cache_path,
             "server": server_var.get(),
-            "install_plugins": plugins_var.get(),
             "rk7man_path": ini_path,
+            "cs_path": state["cs_path"],
             "cs_url": cs_url_var.get().strip(),
             "fs_url": fs_url_var.get().strip(),
             "sql_enabled": sql_enabled,
@@ -519,11 +726,20 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
         def job():
             try:
                 install_feature_server(options, append_log)
+                schrep_guid = read_schrep_guid(ini_path)
+                if not schrep_guid:
+                    raise FeatureServerError(
+                        "В SchRepPluginClient.ini не найден fs_guid в секции [CS_CONNECTION]."
+                    )
+                fs_shortcut = os.path.join(task_folder, "FS.lnk")
                 create_lnk(
-                    os.path.join(task_folder, "FS.lnk"),
+                    fs_shortcut,
                     os.path.join(install_path, "IRReportsFSPrj.exe"),
                     "/desktop"
                 )
+                if not minimize_lnk(fs_shortcut):
+                    raise FeatureServerError(f"Не удалось настроить свёрнутый запуск FS:\n{fs_shortcut}")
+                _create_cs_shortcut(task_folder, options["cs_path"])
             except Exception as e:
                 def show_error(error_message=str(e)):
                     if not win.winfo_exists():
@@ -547,7 +763,6 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
                     "version": version,
                     "cache_path": cache_path,
                     "server": server_var.get(),
-                    "install_plugins": plugins_var.get(),
                     "cs_url": cs_url_var.get().strip(),
                     "fs_url": fs_url_var.get().strip(),
                     "sql_enabled": sql_enabled,
@@ -555,6 +770,11 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
                     "sql_windows_auth": windows_auth,
                     "sql_username": "" if windows_auth else username_var.get().strip(),
                 }
+                current_task = current_data.get("tasks", {}).get(task_id)
+                if current_task is not None:
+                    current_task["run_fs_cs_with_rk7man"] = launch_services_var.get()
+                    current_task["schrep_fs_guid"] = schrep_guid
+                    current_task["cs_service_path"] = options["cs_path"]
                 save_data(current_data)
                 set_busy(False)
                 status_var.set("Установка завершена")

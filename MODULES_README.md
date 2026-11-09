@@ -53,6 +53,7 @@
 - `create_task_shortcuts(task_folder, bin_win_path)` - все ярлыки
 - `create_folder_lnk(lnk_path, target)` - ярлык папки
 - `create_lnk(lnk_path, target, args)` - ярлык файла
+- `minimize_lnk(lnk_path)` - настройка существующего ярлыка на свёрнутый запуск
 
 ### modules/changelog.py
 История изменений для вкладки «Что нового»:
@@ -61,9 +62,12 @@
 
 ### modules/feature_server.py
 Установка Feature Server через PowerShell-модуль `deploy-stands/get-ir/get-ir.psm1`:
-- `feature_server_dialog()` - окно параметров дистрибутива, SQL и плагинов RK7man
-- `install_feature_server()` - фоновый запуск Get-IR и проверка созданных файлов
-- Настройки без паролей сохраняются в `settings.feature_server`
+- `feature_server_dialog()` - окно параметров дистрибутива, SQL и совместного запуска FS/CS с RK7man
+- `install_feature_server()` - фоновый запуск Get-IR и проверка созданных файлов, включая плагин RK7man
+- `launch_feature_services()` - свёрнутый запуск FS.lnk и CS.lnk от администратора, минимизация окна FS после старта, создание ярлыка и сохранение пути CS
+- `prepare_schrep_plugin()` / `restore_schrep_plugin()` - управление именем INI плагина при запуске RK7man
+- `read_schrep_guid()` / `set_schrep_guid()` - чтение и подстановка `fs_guid` из `[CS_CONNECTION]`
+- Настройки без паролей сохраняются в `settings.feature_server`, флаг совместного запуска, путь CS и GUID — в параметрах задачи
 
 ## Использование
 
