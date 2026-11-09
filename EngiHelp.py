@@ -68,7 +68,7 @@ from modules.log_viewer import open_log_viewer
 from modules.feature_server import feature_server_dialog
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.2.0.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.3.0.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -3560,11 +3560,11 @@ frame_refsrv_rk7man.pack(anchor="w", pady=(0, 4))
 
 # Онлайн лог с 200 строками
 def open_log_file(log_name):
-    open_log_viewer(root, [os.path.join(ini_path, log_name)])
+    open_log_viewer(root, [os.path.join(ini_path, log_name)], before=notebook)
 
 def open_multiple_logs(*log_names):
     log_paths = [os.path.join(ini_path, name) for name in log_names]
-    open_log_viewer(root, log_paths)
+    open_log_viewer(root, log_paths, before=notebook)
 
 # Кнопка Refsrv + RK7man
 tk.Button(frame_refsrv_rk7man, text="Refsrv + RK7man", command=run_refsrv_and_rk7man, width=15)\

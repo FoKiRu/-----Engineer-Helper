@@ -59,120 +59,141 @@ class _LogFile:
         return [line.rstrip("\r") for line in lines]
 
 
-def open_log_viewer(parent, log_paths, tail_lines=200):
-    paths = [os.fspath(path) for path in log_paths]
-    names = [os.path.basename(path) for path in paths]
-    window = tk.Toplevel(parent)
-    window.title("Лог: " + names[0] if len(paths) == 1 else "Логи: " + ", ".join(names))
-    parent.update_idletasks()
-    width = parent.winfo_width()
-    height = parent.winfo_height()
-    border = parent.winfo_rootx() - parent.winfo_x()
-    x = parent.winfo_x() + width + border * 2
-    y = parent.winfo_y()
-    window.geometry(f"{width}x{height}{x:+d}{y:+d}")
-    window.minsize(400, 200)
+class _LogViewer:
+    def __init__(self, parent, tail_lines, before=None):
+        self.parent = parent
+        self.tail_lines = tail_lines
+        self.before = before
+        self.panel = None
+        self.title_label = None
+        self.text = None
+        self.paths = []
+        self.sources = []
+        self.multiple = False
+        self.after_id = None
+        self.panel_width = 0
 
-    scrollbar = tk.Scrollbar(window, orient="vertical")
-    text = tk.Text(
-        window,
-        wrap="word",
-        font=("Consolas", 9),
-        state="disabled",
-        yscrollcommand=scrollbar.set,
-    )
-    scrollbar.config(command=text.yview)
-    scrollbar.pack(side="right", fill="y")
-    text.pack(side="left", fill="both", expand=True)
+    def open(self, log_paths):
+        paths = [os.fspath(path) for path in log_paths]
+        if self.panel is not None and self.panel.winfo_ismapped() and paths == self.paths:
+            self.close()
+            return self.panel
+        if self.panel is None:
+            self._create_panel()
+        if not self.panel.winfo_ismapped():
+            self._show_panel()
+        if paths != self.paths:
+            self._set_logs(paths)
+        elif self.after_id is None:
+            self._refresh()
+        self.text.focus_set()
+        return self.panel
 
-    sources = [_LogFile(path, tail_lines) for path in paths]
-    multiple = len(sources) > 1
-    after_id = [None]
-    closed = [False]
-    parent_configure_binding = [None]
-    syncing = [False]
-    window.update_idletasks()
-    positions = {
-        "parent": (parent.winfo_x(), parent.winfo_y()),
-        "log": (window.winfo_x(), window.winfo_y()),
-    }
+    def _create_panel(self):
+        self.panel = tk.Frame(self.parent)
+        self.panel.pack_propagate(False)
 
-    def sync_position(source_name):
-        if closed[0] or syncing[0]:
-            return
-        source = parent if source_name == "parent" else window
-        target_name = "log" if source_name == "parent" else "parent"
-        target = window if source_name == "parent" else parent
-        current = (source.winfo_x(), source.winfo_y())
-        previous = positions[source_name]
-        if current == previous:
-            return
-        target_position = (
-            positions[target_name][0] + current[0] - previous[0],
-            positions[target_name][1] + current[1] - previous[1],
+        header = tk.Frame(self.panel)
+        header.pack(side="top", fill="x")
+        self.title_label = tk.Label(header, anchor="w")
+        self.title_label.pack(side="left", fill="x", expand=True, padx=(6, 3), pady=3)
+        tk.Button(header, text="✕", command=self.close, width=2).pack(side="right", padx=(0, 3), pady=2)
+
+        body = tk.Frame(self.panel)
+        body.pack(side="top", fill="both", expand=True)
+        scrollbar = tk.Scrollbar(body, orient="vertical")
+        self.text = tk.Text(
+            body,
+            wrap="word",
+            font=("Consolas", 9),
+            state="disabled",
+            yscrollcommand=scrollbar.set,
         )
-        positions[source_name] = current
-        positions[target_name] = target_position
-        syncing[0] = True
-        try:
-            target.geometry(f"{target_position[0]:+d}{target_position[1]:+d}")
-        finally:
-            syncing[0] = False
+        scrollbar.config(command=self.text.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.text.pack(side="left", fill="both", expand=True)
+        self.text.bind("<MouseWheel>", self._on_mousewheel)
 
-    def append_lines(source, lines):
+    def _show_panel(self):
+        self.parent.update_idletasks()
+        width = self.parent.winfo_width()
+        height = self.parent.winfo_height()
+        self.panel_width = width
+        self.panel.config(width=self.panel_width)
+        options = {"side": "right", "fill": "y"}
+        if self.before is not None:
+            options["before"] = self.before
+        self.panel.pack(**options)
+        self.parent.geometry(f"{width + self.panel_width}x{height}")
+
+    def _set_logs(self, paths):
+        if self.after_id is not None:
+            self.panel.after_cancel(self.after_id)
+            self.after_id = None
+        self.paths = paths
+        names = [os.path.basename(path) for path in paths]
+        title = "Лог: " + names[0] if len(paths) == 1 else "Логи: " + ", ".join(names)
+        self.title_label.config(text=title)
+        self.sources = [_LogFile(path, self.tail_lines) for path in paths]
+        self.multiple = len(self.sources) > 1
+        self.text.config(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.config(state="disabled")
+        self._refresh()
+        self._show_initial_end()
+        self.panel.after_idle(self._show_initial_end)
+
+    def _append_lines(self, source, lines):
         if not lines:
             return
-        follow = text.yview()[1] >= 0.999
-        prefix = f"[{os.path.basename(source.path)}] " if multiple else ""
-        text.config(state="normal")
-        text.insert("end", "".join(prefix + line + "\n" for line in lines))
-        text.config(state="disabled")
+        follow = self.text.yview()[1] >= 0.999
+        prefix = f"[{os.path.basename(source.path)}] " if self.multiple else ""
+        self.text.config(state="normal")
+        self.text.insert("end", "".join(prefix + line + "\n" for line in lines))
+        self.text.config(state="disabled")
         if follow:
-            text.see("end")
+            self.text.see("end")
 
-    def refresh():
-        if closed[0]:
+    def _refresh(self):
+        if self.panel is None:
+            self.after_id = None
             return
-        for source in sources:
+        for source in self.sources:
             try:
-                append_lines(source, source.read())
+                self._append_lines(source, source.read())
                 source.error = None
             except OSError as exc:
                 message = str(exc)
                 if source.error != message:
-                    append_lines(source, [f"Ошибка чтения: {message}"])
+                    self._append_lines(source, [f"Ошибка чтения: {message}"])
                     source.error = message
-        after_id[0] = window.after(500, refresh)
+        self.after_id = self.panel.after(500, self._refresh)
 
-    def on_mousewheel(event):
+    def _on_mousewheel(self, event):
         steps = -int(event.delta / 120)
         if steps == 0:
             steps = -1 if event.delta > 0 else 1
-        text.yview_scroll(steps, "units")
+        self.text.yview_scroll(steps, "units")
         return "break"
 
-    def on_close():
-        closed[0] = True
-        if after_id[0] is not None:
-            window.after_cancel(after_id[0])
-        if parent_configure_binding[0] is not None:
-            try:
-                parent.unbind("<Configure>", parent_configure_binding[0])
-            except tk.TclError:
-                pass
-        window.destroy()
+    def close(self):
+        if self.after_id is not None:
+            self.panel.after_cancel(self.after_id)
+            self.after_id = None
+        if self.panel is not None and self.panel.winfo_ismapped():
+            width = self.parent.winfo_width()
+            height = self.parent.winfo_height()
+            self.panel.pack_forget()
+            self.parent.geometry(f"{max(1, width - self.panel_width)}x{height}")
 
-    def show_initial_end():
-        if not closed[0]:
-            text.see("end")
+    def _show_initial_end(self):
+        if self.panel is not None and self.panel.winfo_ismapped():
+            self.text.see("end")
 
-    text.bind("<MouseWheel>", on_mousewheel)
-    parent_configure_binding[0] = parent.bind(
-        "<Configure>", lambda event: sync_position("parent"), add="+"
-    )
-    window.bind("<Configure>", lambda event: sync_position("log"), add="+")
-    window.protocol("WM_DELETE_WINDOW", on_close)
-    refresh()
-    show_initial_end()
-    window.after_idle(show_initial_end)
-    return window
+
+def open_log_viewer(parent, log_paths, tail_lines=200, before=None):
+    viewer = getattr(parent, "_log_viewer_instance", None)
+    if viewer is None:
+        viewer = _LogViewer(parent, tail_lines, before)
+        parent._log_viewer_instance = viewer
+    return viewer.open(log_paths)
