@@ -1,5 +1,6 @@
 # ======================= Импорты =======================
 from tkinter import filedialog, ttk
+from tkinterdnd2 import DND_FILES, TkinterDnD
 from functools import partial
 from datetime import datetime
 import tkinter as tk
@@ -70,7 +71,7 @@ from modules.feature_server import launch_feature_services, prepare_schrep_plugi
 from modules.feature_server import set_schrep_guid
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.4.0.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.5.0.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -94,6 +95,7 @@ FEATURES = [
         "автоматическое удаление старых бэкапов refsrv",
         "установка Feature Server и плагинов Interactive Reports для RK7man",
         "подготовка rk7.udb через API utils.ucs.ru (вкладка «База»)",
+        "копирование перетащенных файлов в base выбранной задачи",
     ]),
     ("Программа", [
         "автоматическая проверка обновлений",
@@ -116,7 +118,7 @@ print("Программа запускается.")
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # === GUI ===
-root = tk.Tk()
+root = TkinterDnD.Tk()
 root.withdraw()
 root.title(f"EngiHelp {SCRIPT_VERSION}")
 
@@ -211,6 +213,13 @@ notebook.add(settings_tab, text="Параметры")
 # =================== Работа с EngiHelp_config.json (мульти-пути) =============
 # load_settings_and_paths импортирована из modules.data_manager
 
+def format_rk_path_for_display(path):
+    parts = path.replace("\\", "/").strip("/").split("/")
+    if len(parts) >= 5 and [part.lower() for part in parts[-2:]] == ["bin", "win"]:
+        return f"{parts[0]}/.../{parts[-4]}/{parts[-3]}/"
+    return path
+
+
 def save_settings_and_path(new_path):
     data = load_data()
 
@@ -227,7 +236,8 @@ def save_settings_and_path(new_path):
 
     # Обновляем выпадающий список в интерфейсе
     if 'path_entry' in globals():
-        path_entry['values'] = data["settings"]["recent_paths"]
+        path_entry['values'] = [format_rk_path_for_display(path)
+                                for path in data["settings"]["recent_paths"]]
 # find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path импортированы из modules.data_manager
 # extract_task_id_from_rk7srv_ini, find_product_root, extract_rk_version_from_path, find_available_rk_versions импортированы из modules.task_manager
 
@@ -918,7 +928,8 @@ def _relocate_missing_task(task_id, entry, version_key):
     # Сама версия RK перенесена — переводим её дефолтные настройки и путь в истории
     if old_root and not os.path.isdir(old_root) and new_root and move_version_settings(old_root, new_root):
         if 'path_entry' in globals():
-            path_entry['values'] = load_data()["settings"].get("recent_paths", [])
+            recent_paths = load_data()["settings"].get("recent_paths", [])
+            path_entry['values'] = [format_rk_path_for_display(path) for path in recent_paths]
         messages.append(f"Настройки версии без задачи и история путей переведены на {new_root}")
 
     centered_info("Путь задачи изменён", "\n\n".join(messages))
@@ -2496,10 +2507,16 @@ add_tooltip(add_task_btn, "Создать задачу из базы текущ�
 path_frame = tk.Frame(path_task_frame)
 path_frame.pack(fill="x", padx=8, pady=(5, 5))
 path_var = tk.StringVar()
+path_display_var = tk.StringVar()
+path_var.trace_add("write", lambda *_: path_display_var.set(format_rk_path_for_display(path_var.get())))
 ini_paths, auto_update_enabled, task_from_version_enabled, keep_cloud_files_enabled, _ = load_settings_and_paths()
 if ini_paths:
     path_var.set(ini_paths[0])
-path_entry = ttk.Combobox(path_frame, textvariable=path_var, values=ini_paths)
+path_entry = ttk.Combobox(
+    path_frame,
+    textvariable=path_display_var,
+    values=[format_rk_path_for_display(path) for path in ini_paths]
+)
 path_entry.pack(side="left", fill="x", expand=True)
 
 
@@ -2687,7 +2704,15 @@ def apply_path(event=None, update_task=True): # Добавлен парамет�
     
     set_task_ids(load_task_ids())
 
-path_entry.bind("<<ComboboxSelected>>", apply_path) # Обновление после выбора пути из списка
+def on_path_selected(event=None):
+    recent_paths = load_data()["settings"].get("recent_paths", [])
+    index = path_entry.current()
+    if 0 <= index < len(recent_paths):
+        path_var.set(recent_paths[index])
+        apply_path()
+
+
+path_entry.bind("<<ComboboxSelected>>", on_path_selected)
 
 def check_program_process():
     if is_process_running("refsrv.exe"):
@@ -4611,6 +4636,81 @@ def _udb_release_file(task_id, udb_path):
         return False
     return True
 
+
+def _copy_dropped_file(source, destination):
+    temp_path = destination + ".engihelp_drop"
+    try:
+        shutil.copy2(source, temp_path)
+        os.replace(temp_path, destination)
+    except Exception:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        raise
+
+
+def on_files_dropped(event):
+    """Копирует перетащенные файлы в base выбранной задачи после подтверждения."""
+    task_id = task_id_var.get().strip()
+    if not task_id:
+        centered_warning("Перетаскивание файлов", "Сначала выберите задачу на панели слева.")
+        return "copy"
+    base_path = get_current_task_base_path(task_id)
+    if not base_path or not os.path.isdir(base_path):
+        centered_error("Перетаскивание файлов", f"Папка base задачи {task_id} не найдена:\n{base_path or '—'}")
+        return "copy"
+
+    try:
+        dropped_paths = [os.path.normpath(path) for path in root.tk.splitlist(event.data)]
+    except (tk.TclError, TypeError):
+        dropped_paths = []
+    files = [path for path in dropped_paths if os.path.isfile(path)]
+    if not files:
+        centered_warning("Перетаскивание файлов", "Перетащите один или несколько файлов, а не папки.")
+        return "copy"
+
+    destinations = {path: os.path.join(base_path, os.path.basename(path)) for path in files}
+    files = [path for path in files
+             if os.path.normcase(path) != os.path.normcase(os.path.normpath(destinations[path]))]
+    if not files:
+        centered_info("Перетаскивание файлов", "Перетащенные файлы уже находятся в base этой задачи.")
+        return "copy"
+
+    names = "\n".join(f"• {os.path.basename(path)}" for path in files[:8])
+    if len(files) > 8:
+        names += f"\n• … и ещё {len(files) - 8}"
+    message = f"Скопировать файлы в base задачи {task_id}?\n\n{names}\n\n{base_path}"
+    if any(os.path.exists(destinations[path]) for path in files):
+        message += "\n\nСуществующие файлы с такими именами будут заменены."
+    if not centered_askyesno("Перетаскивание файлов", message):
+        return "copy"
+
+    udb_targets = [destinations[path] for path in files if os.path.basename(path).lower() == "rk7.udb"]
+    if udb_targets and not _udb_release_file(task_id, udb_targets[0]):
+        return "copy"
+
+    copied, errors = [], []
+    for source in files:
+        try:
+            _copy_dropped_file(source, destinations[source])
+            copied.append(os.path.basename(source))
+        except Exception as e:
+            errors.append(f"{os.path.basename(source)}: {e}")
+    if copied:
+        refresh_udb_tab()
+
+    result = []
+    if copied:
+        result.append(f"Скопировано в base задачи {task_id}:\n" + "\n".join(f"• {name}" for name in copied))
+    if errors:
+        result.append("Не удалось скопировать:\n" + "\n".join(f"• {error}" for error in errors))
+    if result:
+        show_result = centered_error if errors else centered_info
+        show_result("Перетаскивание файлов", "\n\n".join(result))
+    return "copy"
+
+
 def udb_process():
     """Отправляет rk7.udb выбранной задачи на utils.ucs.ru, выполняет отмеченные операции,
     скачивает результат на место исходного файла (исходный — в rk7.udb.before_api)
@@ -4890,8 +4990,22 @@ for i, (key, label, width) in enumerate([
         ("newrefsdataversion", "Версия refsdata", 14)]):
     row, col = divmod(i, 2)
     tk.Label(udb_params_frame, text=label + ":").grid(row=row, column=col * 2, sticky="w", padx=(4, 2), pady=1)
-    tk.Entry(udb_params_frame, textvariable=udb_param_vars[key], width=width).grid(
-        row=row, column=col * 2 + 1, sticky="w", padx=(0, 6), pady=1)
+    entry = tk.Entry(udb_params_frame, textvariable=udb_param_vars[key], width=width)
+    entry.grid(row=row, column=col * 2 + 1, sticky="w", padx=(0, 6), pady=1)
+    if key == "newrefsdataversion":
+        placeholder = tk.Label(entry, text="Необязательно", fg="gray40", bg=entry.cget("bg"))
+
+        def update_placeholder(*_):
+            if udb_param_vars[key].get() or entry.focus_get() == entry:
+                placeholder.place_forget()
+            else:
+                placeholder.place(x=0, y=0, relheight=1)
+
+        placeholder.bind("<Button-1>", lambda _: entry.focus_set())
+        entry.bind("<FocusIn>", update_placeholder)
+        entry.bind("<FocusOut>", update_placeholder)
+        udb_param_vars[key].trace_add("write", update_placeholder)
+        update_placeholder()
 
 udb_action_frame = tk.Frame(udb_tab)
 udb_action_frame.pack(padx=10, pady=(6, 0), fill="x")
@@ -5197,6 +5311,9 @@ root.after(3000, clean_backups_in_background)
 # === Инициализация глобальных горячих клавиш ===
 root.protocol("WM_DELETE_WINDOW", on_closing)
 setup_global_hotkeys()
+
+root.drop_target_register(DND_FILES)
+root.dnd_bind("<<Drop>>", on_files_dropped)
 
 on_check()
 root.deiconify()
