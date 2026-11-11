@@ -439,8 +439,18 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
     ttk.Combobox(
         distribution, textvariable=server_var, values=("web", "new"), state="readonly", width=15
     ).grid(row=3, column=1, sticky="w", pady=3)
+    def on_launch_services_toggle():
+        current_data = load_data()
+        current_task = current_data.get("tasks", {}).get(task_id)
+        if current_task is not None:
+            current_task["run_fs_cs_with_rk7man"] = launch_services_var.get()
+            save_data(current_data)
+
     tk.Checkbutton(
-        distribution, text="Запускать FS, CS вместе с RK7man", variable=launch_services_var
+        distribution,
+        text="Запускать FS, CS вместе с RK7man",
+        variable=launch_services_var,
+        command=on_launch_services_toggle,
     ).grid(row=4, column=0, columnspan=4, sticky="w", padx=6, pady=(2, 5))
 
     sql_frame = tk.LabelFrame(frame, text="База данных")

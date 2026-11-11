@@ -271,8 +271,8 @@ def centered_askstring(title, message):
     win, frame = _create_dialog(title, message)
     result = [None]
 
-    entry = tk.Entry(frame, width=40)
-    entry.pack(padx=15, pady=(0, 10), fill="x")
+    entry = tk.Entry(frame, width=32)
+    entry.pack(padx=15, pady=(0, 8), fill="x")
 
     def ok(event=None):
         result[0] = entry.get().strip()
@@ -280,11 +280,11 @@ def centered_askstring(title, message):
 
     win.bind("<Return>", ok)
     btn_frame = tk.Frame(frame)
-    btn_frame.pack(pady=(0, 15))
-    tk.Button(btn_frame, text="Создать", command=ok, width=10).pack(side="left", padx=5)
-    tk.Button(btn_frame, text="Отмена", command=win.destroy, width=10).pack(side="left", padx=5)
+    btn_frame.pack(pady=(0, 12))
+    tk.Button(btn_frame, text="Создать", command=ok, width=9).pack(side="left", padx=4)
+    tk.Button(btn_frame, text="Отмена", command=win.destroy, width=9).pack(side="left", padx=4)
 
-    _center_window(win)
+    _center_window(win, max_width=380, min_width=300)
 
     win.focus_force()
     win.deiconify()

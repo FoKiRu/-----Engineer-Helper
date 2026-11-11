@@ -48,7 +48,7 @@ from modules.cloud_rk7man import cloud_rk7man_dialog
 from modules.shortcuts import create_task_shortcuts
 from modules.task_manager import extract_task_id_from_rk7srv_ini, find_product_root
 from modules.task_manager import extract_rk_version_from_path, find_available_rk_versions, find_rk_versions_in_dir
-from modules.task_manager import create_task_for_version
+from modules.task_manager import create_task_for_version, get_new_task_ini_settings
 from modules.task_manager import find_running_task_by_ports, find_last_running_task, _main_refsrv_port
 from modules.task_manager import relocate_task, add_found_task_version, find_task_in_versions, get_missing_versions
 from modules.task_manager import ensure_task_midbase
@@ -71,7 +71,7 @@ from modules.feature_server import launch_feature_services, prepare_schrep_plugi
 from modules.feature_server import set_schrep_guid
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.5.0.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.5.2.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -2296,10 +2296,10 @@ def save_task_id():
     update_rkeeper_ini_basepath(path_var.get(), midbase_ini_name)
 
     # Собираем параметры INI
-    ini_settings = get_ini_settings(path_var.get())
+    data = load_data()
+    ini_settings = get_new_task_ini_settings(path_var.get(), data)
 
     # Сохраняем в JSON
-    data = load_data()
     tasks = data.get("tasks", {})
 
     # Сохраняем versions из существующей записи (если есть)
@@ -2344,8 +2344,7 @@ def add_task():
     task_id_var.set("")
     task_id = centered_askstring(
         "Новая задача",
-        "Введите название задачи.\n\n"
-        "Если указать номер задачи из SD, её можно будет открывать прямо из программы."
+        "Введите название или номер задачи SD."
     )
     if task_id is None:
         return
@@ -4650,6 +4649,13 @@ def _copy_dropped_file(source, destination):
         raise
 
 
+def _dropped_file_name(path):
+    name = os.path.basename(path)
+    if name.lower().startswith("rk7") and name.lower().endswith(".udb"):
+        return "rk7.udb"
+    return name
+
+
 def on_files_dropped(event):
     """Копирует перетащенные файлы в base выбранной задачи после подтверждения."""
     task_id = task_id_var.get().strip()
@@ -4670,7 +4676,7 @@ def on_files_dropped(event):
         centered_warning("Перетаскивание файлов", "Перетащите один или несколько файлов, а не папки.")
         return "copy"
 
-    destinations = {path: os.path.join(base_path, os.path.basename(path)) for path in files}
+    destinations = {path: os.path.join(base_path, _dropped_file_name(path)) for path in files}
     files = [path for path in files
              if os.path.normcase(path) != os.path.normcase(os.path.normpath(destinations[path]))]
     if not files:
@@ -4686,7 +4692,10 @@ def on_files_dropped(event):
     if not centered_askyesno("Перетаскивание файлов", message):
         return "copy"
 
-    udb_targets = [destinations[path] for path in files if os.path.basename(path).lower() == "rk7.udb"]
+    udb_targets = [
+        destinations[path] for path in files
+        if os.path.basename(destinations[path]).lower() == "rk7.udb"
+    ]
     if udb_targets and not _udb_release_file(task_id, udb_targets[0]):
         return "copy"
 
@@ -4694,7 +4703,7 @@ def on_files_dropped(event):
     for source in files:
         try:
             _copy_dropped_file(source, destinations[source])
-            copied.append(os.path.basename(source))
+            copied.append(os.path.basename(destinations[source]))
         except Exception as e:
             errors.append(f"{os.path.basename(source)}: {e}")
     if copied:
