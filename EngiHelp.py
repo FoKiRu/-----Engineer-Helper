@@ -43,6 +43,7 @@ from modules.ini_utils import get_rk7srv_udb_workmodules, get_usedbsync_values
 from modules.process_utils import kill_midserv, kill_doscash
 from modules.process_utils import kill_processes_for_version_change, get_used_ports, get_process_by_name, is_process_running
 from modules.process_utils import get_port_info, get_rk7man_port_info, get_process_listening_ports
+from modules.process_utils import has_visible_window_for_pid
 from modules.process_utils import launch_refsrv, wait_and_launch_refsrv
 from modules.cloud_rk7man import cloud_rk7man_dialog
 from modules.shortcuts import create_task_shortcuts
@@ -71,7 +72,7 @@ from modules.feature_server import launch_feature_services, prepare_schrep_plugi
 from modules.feature_server import set_schrep_guid
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.5.2.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.5.3.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -3220,45 +3221,89 @@ def _rename_refserver(new_name):
     else:
         sync_default_settings_if_no_task()
 
-def _restore_schrep_plugin_after_launch(ini_path_norm, plugin_paths, before_pids, attempts=40):
-    started = any(
-        exe_dir == ini_path_norm and proc.pid not in before_pids
-        for proc, exe_dir in get_process_by_name('rk7man.exe')
-    )
-    if not started and attempts > 0:
-        root.after(250, lambda: _restore_schrep_plugin_after_launch(
-            ini_path_norm, plugin_paths, before_pids, attempts - 1
-        ))
+_rk7man_launch_active = set()
+_rk7man_launch_queues = {}
+
+
+def _finish_rk7man_launch(ini_path_norm):
+    pending = _rk7man_launch_queues.get(ini_path_norm)
+    if pending:
+        launch_ini_path, task_id, task_info = pending.pop(0)
+        root.after(0, lambda: _start_rk7man_only(launch_ini_path, task_id, task_info))
         return
+    _rk7man_launch_queues.pop(ini_path_norm, None)
+    _rk7man_launch_active.discard(ini_path_norm)
+
+
+def _restore_schrep_plugin_after_launch(ini_path_norm, plugin_paths, before_pids, launcher, exit_attempts=20):
+    new_procs = [
+        proc for proc, exe_dir in get_process_by_name('rk7man.exe')
+        if exe_dir == ini_path_norm and proc.pid not in before_pids
+    ]
+    started = any(
+        has_visible_window_for_pid(proc.pid, "TfmMain.UnicodeClass")
+        for proc in new_procs
+    )
+    if not started:
+        if new_procs or launcher.poll() is None:
+            root.after(250, lambda: _restore_schrep_plugin_after_launch(
+                ini_path_norm, plugin_paths, before_pids, launcher
+            ))
+            return
+        if exit_attempts > 0:
+            root.after(250, lambda: _restore_schrep_plugin_after_launch(
+                ini_path_norm, plugin_paths, before_pids, launcher, exit_attempts - 1
+            ))
+            return
     try:
-        restore_schrep_plugin(*plugin_paths)
+        if plugin_paths:
+            restore_schrep_plugin(*plugin_paths)
     except OSError as e:
         centered_error("SchRepPluginClient", f"Не удалось восстановить имя INI после запуска RK7man:\n{e}")
+    finally:
+        _finish_rk7man_launch(ini_path_norm)
 
 
 def start_rk7man_only():
     """Запускает rk7man.bat с настроенными для задачи FS, CS и плагином SchRep."""
-    ini_path_norm = os.path.normpath(ini_path).lower()
-    bat_path = os.path.join(ini_path, "rk7man.bat")
-    if not os.path.isfile(bat_path):
-        centered_error("Ошибка", f"Файл не найден:\n{bat_path}")
-        return
-
+    launch_ini_path = ini_path
+    ini_path_norm = os.path.normpath(launch_ini_path).lower()
     task_id = task_id_var.get().strip()
     task_info = get_task_data(task_id) or {}
+    if ini_path_norm in _rk7man_launch_active:
+        _rk7man_launch_queues.setdefault(ini_path_norm, []).append(
+            (launch_ini_path, task_id, task_info)
+        )
+        print(f"[RK7man] Запуск задачи {task_id or 'без задачи'} поставлен в очередь: {launch_ini_path}")
+        return
+    _rk7man_launch_active.add(ini_path_norm)
+    _start_rk7man_only(launch_ini_path, task_id, task_info)
+
+
+def _start_rk7man_only(launch_ini_path, task_id, task_info):
+    ini_path_norm = os.path.normpath(launch_ini_path).lower()
+    bat_path = os.path.join(launch_ini_path, "rk7man.bat")
+    if not os.path.isfile(bat_path):
+        centered_error("Ошибка", f"Файл не найден:\n{bat_path}")
+        _finish_rk7man_launch(ini_path_norm)
+        return
+
     launch_with_services = bool(task_info.get("run_fs_cs_with_rk7man", False))
     if launch_with_services and task_info.get("schrep_fs_guid"):
         try:
-            set_schrep_guid(ini_path, task_info["schrep_fs_guid"])
+            set_schrep_guid(launch_ini_path, task_info["schrep_fs_guid"])
         except (FeatureServerError, OSError) as e:
             centered_error("SchRepPluginClient", str(e))
+            _finish_rk7man_launch(ini_path_norm)
             return
     if launch_with_services and not launch_feature_services(task_id, task_info, root):
+        _finish_rk7man_launch(ini_path_norm)
         return
     try:
-        plugin_paths = prepare_schrep_plugin(ini_path, launch_with_services)
+        plugin_paths = prepare_schrep_plugin(launch_ini_path, launch_with_services)
     except (FeatureServerError, OSError) as e:
         centered_error("SchRepPluginClient", str(e))
+        _finish_rk7man_launch(ini_path_norm)
         return
 
     # Закрываем только rk7man из текущей директории
@@ -3272,7 +3317,11 @@ def start_rk7man_only():
     time.sleep(0.5)
     before_pids = {proc.pid for proc, _ in get_process_by_name('rk7man.exe')}
     try:
-        subprocess.Popen(f'start "" cmd /c "{bat_path}"', shell=True, cwd=ini_path)
+        launcher = subprocess.Popen(
+            ["cmd", "/c", bat_path],
+            cwd=launch_ini_path,
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
     except Exception as e:
         if plugin_paths:
             try:
@@ -3280,11 +3329,11 @@ def start_rk7man_only():
             except OSError as restore_error:
                 centered_error("SchRepPluginClient", f"Не удалось восстановить имя INI:\n{restore_error}")
         centered_error("Ошибка запуска", str(e))
+        _finish_rk7man_launch(ini_path_norm)
         return
-    if plugin_paths:
-        root.after(250, lambda: _restore_schrep_plugin_after_launch(
-            ini_path_norm, plugin_paths, before_pids
-        ))
+    root.after(250, lambda: _restore_schrep_plugin_after_launch(
+        ini_path_norm, plugin_paths, before_pids, launcher
+    ))
 
 # ======================= Запуск wincash.bat =======================
 # (функция run_wincash_bat удалена - использовалась start_wincash_only)

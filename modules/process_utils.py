@@ -4,10 +4,43 @@ import os
 import subprocess
 import time
 import logging
+import ctypes
+import ctypes.wintypes
 
 import psutil
 
 # ======================= Поиск процессов =======================
+
+def has_visible_window_for_pid(pid, class_name):
+    user32 = ctypes.windll.user32
+    user32.GetWindowThreadProcessId.argtypes = [
+        ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)
+    ]
+    user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+    user32.GetClassNameW.argtypes = [
+        ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR, ctypes.c_int
+    ]
+    user32.GetClassNameW.restype = ctypes.c_int
+    user32.IsWindowVisible.argtypes = [ctypes.wintypes.HWND]
+    user32.IsWindowVisible.restype = ctypes.wintypes.BOOL
+    found = False
+
+    @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+    def enum_window(hwnd, _):
+        nonlocal found
+        window_pid = ctypes.wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+        if window_pid.value == pid and user32.IsWindowVisible(hwnd):
+            buffer = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, buffer, len(buffer))
+            if buffer.value == class_name:
+                found = True
+                return False
+        return True
+
+    user32.EnumWindows(enum_window, 0)
+    return found
+
 
 def get_process_by_name(name):
     """Возвращает список (process, exe_dir) для всех процессов с данным именем."""
