@@ -10,7 +10,14 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 
 from .data_manager import load_data, save_data
-from .dialogs import _center_window, centered_askyesno, centered_error, centered_info, centered_warning
+from .dialogs import (
+    _center_window,
+    centered_askchoice,
+    centered_askyesno,
+    centered_error,
+    centered_info,
+    centered_warning,
+)
 from .process_utils import get_process_by_name
 from .shortcuts import create_lnk, minimize_lnk
 from .sql_database import SqlDatabaseError, create_database, database_exists
@@ -157,6 +164,32 @@ def install_feature_server(options, log_callback=None):
     if not os.path.isfile(shortcut_path) and log_callback:
         log_callback(f"Предупреждение: ярлык не создан: {shortcut_path}")
     return install_path
+
+
+def uninstall_feature_server(install_path, ini_path, task_folder, log_callback=None):
+    if not os.path.isfile(os.path.join(install_path, "IRReportsFSPrj.exe")):
+        raise FeatureServerError("В выбранной папке не найден IRReportsFSPrj.exe.")
+
+    targets = [
+        install_path,
+        os.path.join(ini_path, "plugins", "SchRepPluginClient"),
+        os.path.join(task_folder, "FS.lnk"),
+    ]
+    errors = []
+    for path in targets:
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            elif os.path.exists(path) or os.path.islink(path):
+                os.remove(path)
+            else:
+                continue
+            if log_callback:
+                log_callback(f"Удалено: {path}")
+        except OSError as e:
+            errors.append(f"{path}: {e}")
+    if errors:
+        raise FeatureServerError("Не удалось удалить:\n" + "\n".join(errors))
 
 
 def _same_path(left, right):
@@ -376,7 +409,7 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
 
     win = tk.Toplevel(root)
     win.withdraw()
-    win.title("Установка Feature Server")
+    win.title("Feature Server")
     if icon_path:
         win.iconbitmap(icon_path)
     win.transient(root)
@@ -560,6 +593,7 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
     def set_busy(busy, status="Установка..."):
         state["busy"] = busy
         install_btn.config(state="disabled" if busy else "normal")
+        uninstall_btn.config(state="disabled" if busy else "normal")
         cancel_btn.config(state="disabled" if busy else "normal")
         update_sql_state()
         if busy:
@@ -678,11 +712,19 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
                     update_sql_state()
                     status_var.set("База данных не найдена")
                     append_log(f"База данных не найдена: {database}")
-                    centered_warning(
+                    choice = centered_askchoice(
                         "Установка Feature Server",
-                        f"Базы данных «{database}» нет в списке баз на SQL Server.\n"
-                        "Нажмите «Создать БД», чтобы создать её, или укажите другое имя."
+                        f"База данных «{database}» не найдена на SQL Server.\n\n"
+                        "Создать её сейчас или продолжить установку без подключения к SQL?",
+                        ["Создать БД", "Установить без БД", "Отмена"],
                     )
+                    if choice == 0:
+                        on_create_database()
+                    elif choice == 1:
+                        sql_enabled_var.set(False)
+                        update_sql_state()
+                        append_log("Установка продолжается без создания базы данных и подключения к SQL.")
+                        on_install(database_checked=True)
                 root.after(0, show_result)
 
             threading.Thread(target=check_job, daemon=True).start()
@@ -789,7 +831,85 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
                 set_busy(False)
                 status_var.set("Установка завершена")
                 append_log("Feature Server успешно установлен.")
-                centered_info("Установка Feature Server", f"Feature Server установлен:\n{install_path}")
+                centered_askchoice(
+                    "Установка Feature Server",
+                    f"Feature Server установлен:\n{install_path}",
+                    ["OK"],
+                )
+                win.destroy()
+            root.after(0, show_success)
+
+        threading.Thread(target=job, daemon=True).start()
+
+    def on_uninstall():
+        install_path = os.path.normpath(os.path.abspath(install_path_var.get().strip()))
+        if not install_path_var.get().strip() or os.path.splitdrive(install_path)[1] in ("", "\\", "/"):
+            centered_warning("Удаление Feature Server", "Укажите папку установки Feature Server.")
+            return
+        if _same_path(install_path, ini_path):
+            centered_warning("Удаление Feature Server", "Папка bin\\win не может быть удалена.")
+            return
+        if not os.path.isfile(os.path.join(install_path, "IRReportsFSPrj.exe")):
+            centered_warning("Удаление Feature Server", "Feature Server в выбранной папке не найден.")
+            return
+        for process, process_dir in get_process_by_name("IRReportsFSPrj.exe"):
+            if _same_path(process_dir, install_path):
+                centered_warning(
+                    "Удаление Feature Server",
+                    "Feature Server запущен из выбранной папки. Закройте его и повторите удаление."
+                )
+                return
+        for process, process_dir in get_process_by_name("rk7man.exe"):
+            if _same_path(process_dir, ini_path):
+                centered_warning(
+                    "Удаление Feature Server",
+                    "RK7man текущей версии запущен. Закройте его перед удалением плагина."
+                )
+                return
+
+        plugin_path = os.path.join(ini_path, "plugins", "SchRepPluginClient")
+        fs_shortcut = os.path.join(task_folder, "FS.lnk")
+        if not centered_askyesno(
+            "Удаление Feature Server",
+            f"Будут удалены:\n\n{install_path}\n{plugin_path}\n{fs_shortcut}\n\n"
+            "База данных SQL, кэш дистрибутивов и Common Server не затрагиваются. Продолжить?"
+        ):
+            return
+
+        set_busy(True, "Удаление Feature Server...")
+        log_text.config(state="normal")
+        log_text.delete("1.0", "end")
+        log_text.config(state="disabled")
+
+        def job():
+            try:
+                uninstall_feature_server(install_path, ini_path, task_folder, append_log)
+            except Exception as e:
+                def show_error(error_message=str(e)):
+                    if not win.winfo_exists():
+                        return
+                    set_busy(False)
+                    status_var.set("Ошибка удаления")
+                    append_log(error_message)
+                    centered_error("Удаление Feature Server", error_message)
+                root.after(0, show_error)
+                return
+
+            def show_success():
+                if not win.winfo_exists():
+                    return
+                launch_services_var.set(False)
+                current_data = load_data()
+                current_task = current_data.get("tasks", {}).get(task_id)
+                if current_task is not None:
+                    current_task["run_fs_cs_with_rk7man"] = False
+                    current_task.pop("schrep_fs_guid", None)
+                save_data(current_data)
+                set_busy(False)
+                status_var.set("Feature Server удалён")
+                append_log("Feature Server успешно удалён.")
+                centered_askchoice("Удаление Feature Server", "Feature Server удалён.", ["OK"])
+                win.destroy()
             root.after(0, show_success)
 
         threading.Thread(target=job, daemon=True).start()
@@ -798,6 +918,8 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
     buttons.pack(pady=(0, 12))
     install_btn = tk.Button(buttons, text="Установить", command=on_install, width=12)
     install_btn.pack(side="left", padx=5)
+    uninstall_btn = tk.Button(buttons, text="Удалить", command=on_uninstall, width=12)
+    uninstall_btn.pack(side="left", padx=5)
     cancel_btn = tk.Button(buttons, text="Закрыть", command=on_close, width=12)
     cancel_btn.pack(side="left", padx=5)
 

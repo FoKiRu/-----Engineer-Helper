@@ -72,7 +72,7 @@ from modules.feature_server import launch_feature_services, prepare_schrep_plugi
 from modules.feature_server import set_schrep_guid
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.5.3.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.6.0.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -94,7 +94,7 @@ FEATURES = [
         "запуск и остановка основных сервисов, несколько refsrv в одной версии",
         "очистка base и MIDBASE с резервной копией",
         "автоматическое удаление старых бэкапов refsrv",
-        "установка Feature Server и плагинов Interactive Reports для RK7man",
+        "установка и удаление Feature Server, плагины Interactive Reports для RK7man",
         "подготовка rk7.udb через API utils.ucs.ru (вкладка «База»)",
         "копирование перетащенных файлов в base выбранной задачи",
     ]),
@@ -4452,7 +4452,7 @@ cloud_rk7man_btn = tk.Button(check_folder_frame, text="Cloud RK7man", command=la
 cloud_rk7man_btn.grid(row=1, column=2, padx=5, sticky="ew", pady=(5, 0))
 
 
-def open_feature_server_installer():
+def open_feature_server():
     selected_task_id = task_id_var.get().strip()
     feature_server_dialog(
         root, selected_task_id, ini_path,
@@ -4461,7 +4461,7 @@ def open_feature_server_installer():
 
 
 feature_server_btn = tk.Button(
-    check_folder_frame, text="Установить FS", command=open_feature_server_installer
+    check_folder_frame, text="Feature Server", command=open_feature_server
 )
 feature_server_btn.grid(row=2, column=0, padx=5, sticky="ew", pady=(5, 0))
 
@@ -4474,7 +4474,7 @@ for _btn, _tip in (
     (delete_task_btn, "Удалить задачу: папки base и MIDBASE, папку задачи и запись в списке задач"),
     (change_version_btn, "Перенести базу задачи в другую версию RK (refsrv и RK7man будут закрыты)"),
     (cloud_rk7man_btn, "Запустить RK7man с подключением к облачному серверу по строке подключения"),
-    (feature_server_btn, "Скачать и установить Feature Server, настроить SQL и плагины RK7man"),
+    (feature_server_btn, "Установка и удаление Feature Server, настройка SQL и плагинов RK7man"),
 ):
     add_tooltip(_btn, _tip)
 
