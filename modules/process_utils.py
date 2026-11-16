@@ -327,15 +327,34 @@ def kill_processes_for_version_change():
     return killed
 
 
-def kill_rk_processes_for_task_operation():
-    """Завершает процессы RK, которые могут блокировать папки задачи."""
+_RK_TASK_PROCESS_NAMES = {
+    'refsrv.exe', 'rk7man.exe', 'midserv.exe', 'wincash.exe', 'doscash.exe',
+    'rk7srv.exe', 'IRReportsFSPrj.exe', 'CS_Service.exe'
+}
+
+
+def get_running_rk_processes():
+    """Возвращает список имён запущенных процессов RK/FS/CS."""
     import psutil
-    killed = []
-    target_names = {'refsrv.exe', 'rk7man.exe', 'midserv.exe', 'wincash.exe', 'doscash.exe', 'rk7srv.exe'}
+    running = []
     for proc in psutil.process_iter(['pid', 'name']):
         try:
             name = proc.info['name']
-            if name and name.lower() in target_names:
+            if name and name.lower() in _RK_TASK_PROCESS_NAMES:
+                running.append(name)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return sorted(set(running), key=str.lower)
+
+
+def kill_rk_processes_for_task_operation():
+    """Завершает процессы RK/FS/CS, которые могут блокировать папки задачи."""
+    import psutil
+    killed = []
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            name = proc.info['name']
+            if name and name.lower() in _RK_TASK_PROCESS_NAMES:
                 proc.terminate()
                 killed.append(name)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
