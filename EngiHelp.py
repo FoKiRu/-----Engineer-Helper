@@ -72,7 +72,7 @@ from modules.feature_server import launch_feature_services, prepare_schrep_plugi
 from modules.feature_server import set_schrep_guid
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.8.0.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.8.1.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -2435,7 +2435,7 @@ def add_task():
 # load_task_ids импортирована из modules.data_manager
 
 def delete_task(confirm=True):
-    """Удаляет выбранную задачу: папки base/MIDBASE, папку задачи и запись в JSON.
+    """Удаляет выбранную задачу: папки base/MIDBASE, папки задачи со ярлыками и запись в JSON.
     confirm=False — без окна подтверждения (уже спросили, например когда папка задачи не найдена)."""
     selected_task_id = task_id_var.get().strip()
     if not selected_task_id:
@@ -2528,10 +2528,14 @@ def delete_task(confirm=True):
             failed_paths.append((path, str(e)))
             print(f"Ошибка удаления {path}: {e}")
 
-    # === Шаг 1.5: Удаляем папку {task_id} с ярлыками ===
-    product_root = find_product_root(path_var.get())
-    if product_root:
-        task_folder_to_delete = os.path.join(product_root, selected_task_id)
+    # === Шаг 1.5: Удаляем папку {task_id} с ярлыками во всех версиях ===
+    task_folders_to_delete = set()
+    for ip in ini_paths_to_restore:
+        product_root = find_product_root(ip)
+        if product_root:
+            task_folders_to_delete.add(os.path.join(product_root, selected_task_id))
+
+    for task_folder_to_delete in task_folders_to_delete:
         if os.path.isdir(task_folder_to_delete):
             try:
                 shutil.rmtree(task_folder_to_delete)
