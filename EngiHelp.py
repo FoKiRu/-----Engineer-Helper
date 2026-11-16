@@ -30,7 +30,7 @@ from modules import dialogs
 from modules.app_updater import fetch_remote_version, is_newer_version, download_update, restart_with_update
 from modules.dialogs import _center_window, centered_info, centered_warning, centered_error
 from modules.dialogs import centered_askyesno, centered_askchecklist, centered_askchoice, centered_askselect
-from modules.dialogs import centered_asklogin, centered_askstring, add_tooltip
+from modules.dialogs import centered_asklogin, add_tooltip
 from modules.data_manager import load_data, save_data, load_settings_and_paths, get_task_data
 from modules.data_manager import save_settings_and_path as _save_recent_path
 from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
@@ -72,7 +72,7 @@ from modules.feature_server import launch_feature_services, prepare_schrep_plugi
 from modules.feature_server import set_schrep_guid
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.6.0.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.7.0.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -2343,15 +2343,90 @@ def save_task_id():
 
 def add_task():
     task_id_var.set("")
-    task_id = centered_askstring(
-        "Новая задача",
-        "Введите название или номер задачи SD."
+
+    current_path = path_var.get()
+    current_version = extract_rk_version_from_path(current_path)
+    if not current_version:
+        centered_warning("Предупреждение", "Не удалось определить текущую версию RK из выбранного пути.")
+        return
+
+    available_versions = find_available_rk_versions(current_path)
+    if not available_versions:
+        centered_warning("Предупреждение", "Не найдено доступных версий RK рядом с выбранным путём.")
+        return
+
+    win = tk.Toplevel(root)
+    win.withdraw()
+    win.title("Новая задача")
+
+    if icon_path:
+        win.iconbitmap(icon_path)
+
+    win.transient(root)
+    win.grab_set()
+
+    frame = tk.Frame(win)
+    frame.pack(fill="both", expand=True)
+
+    tk.Label(frame, text="Введите название или номер задачи SD:", justify="left").pack(
+        anchor="w", padx=10, pady=(10, 5)
     )
+
+    task_entry = tk.Entry(frame, width=32)
+    task_entry.pack(fill="x", padx=10, pady=(0, 8))
+
+    tk.Label(frame, text="Версия RK:", justify="left").pack(anchor="w", padx=10, pady=(5, 0))
+
+    version_var = tk.StringVar(value=current_version)
+    version_combo = ttk.Combobox(
+        frame, textvariable=version_var,
+        values=sorted(available_versions, reverse=True),
+        state="readonly", width=30
+    )
+    version_combo.pack(fill="x", padx=10, pady=(0, 10))
+    if current_version in available_versions:
+        version_combo.set(current_version)
+
+    result = [None, None]
+
+    def on_ok(event=None):
+        task_id = task_entry.get().strip()
+        selected_version = version_var.get()
+        if not task_id:
+            centered_warning("Предупреждение", "Введите название задачи.")
+            return
+        if not selected_version:
+            centered_warning("Предупреждение", "Выберите версию RK.")
+            return
+        result[0] = task_id
+        result[1] = selected_version
+        win.destroy()
+
+    def on_cancel():
+        win.destroy()
+
+    win.bind("<Return>", on_ok)
+    btn_frame = tk.Frame(frame)
+    btn_frame.pack(pady=(0, 10))
+    tk.Button(btn_frame, text="Создать", command=on_ok, width=10).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Отмена", command=on_cancel, width=10).pack(side="left", padx=5)
+
+    _center_window(win, max_width=380, min_width=300)
+
+    win.focus_force()
+    win.deiconify()
+    task_entry.focus_set()
+    win.wait_window()
+
+    task_id, selected_version = result
     if task_id is None:
         return
-    if not task_id:
-        centered_warning("Предупреждение", "Введите название задачи.")
-        return
+
+    current_product_root = find_product_root(current_path)
+    if current_product_root:
+        versions_dir = os.path.dirname(current_product_root)
+        selected_path = os.path.join(versions_dir, f"INST{selected_version}", "bin", "win").replace("\\", "/")
+        path_var.set(selected_path)
 
     task_id_var.set(task_id)
     save_task_id()
@@ -2501,7 +2576,7 @@ add_task_btn = tk.Button(
     font=("TkDefaultFont", 8)
 )
 add_task_btn.pack(fill="x", padx=4, pady=(0, 4), before=task_list_frame)
-add_tooltip(add_task_btn, "Создать задачу из базы текущей версии по умолчанию")
+add_tooltip(add_task_btn, "Создать задачу из базы выбранной версии RK")
 
 # Выбор пути
 path_frame = tk.Frame(path_task_frame)
