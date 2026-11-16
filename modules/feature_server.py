@@ -287,21 +287,30 @@ def launch_feature_services(task_id, task_info, parent):
     task_folder = os.path.dirname(os.path.normpath(task_info.get("base_path", "")))
     fs_shortcut = os.path.join(task_folder, "FS.lnk")
     cs_shortcut = os.path.join(task_folder, "CS.lnk")
-    if not os.path.isfile(fs_shortcut):
+
+    fs_running = bool(get_process_by_name("IRReportsFSPrj.exe"))
+    cs_running = bool(get_process_by_name("CS_Service.exe"))
+    if fs_running and cs_running:
+        return True
+
+    if not fs_running and not os.path.isfile(fs_shortcut):
         centered_error("Запуск FS и CS", f"Ярлык Feature Server не найден:\n{fs_shortcut}")
         return False
 
     cs_path = task_info.get("cs_service_path", "")
     try:
-        if not os.path.isfile(cs_shortcut):
-            cs_path = _resolve_cs_service(cs_path, parent, task_folder)
-            if not cs_path:
-                return False
-            _create_cs_shortcut(task_folder, cs_path)
-        if not minimize_lnk(fs_shortcut):
-            raise FeatureServerError(f"Не удалось настроить свёрнутый запуск FS:\n{fs_shortcut}")
-        _start_fs_as_admin(fs_shortcut)
-        _start_as_admin(cs_shortcut)
+        if not cs_running:
+            if not os.path.isfile(cs_shortcut):
+                cs_path = _resolve_cs_service(cs_path, parent, task_folder)
+                if not cs_path:
+                    return False
+                _create_cs_shortcut(task_folder, cs_path)
+        if not fs_running:
+            if not minimize_lnk(fs_shortcut):
+                raise FeatureServerError(f"Не удалось настроить свёрнутый запуск FS:\n{fs_shortcut}")
+            _start_fs_as_admin(fs_shortcut)
+        if not cs_running:
+            _start_as_admin(cs_shortcut)
     except (FeatureServerError, OSError) as e:
         centered_error("Запуск FS и CS", str(e))
         return False
