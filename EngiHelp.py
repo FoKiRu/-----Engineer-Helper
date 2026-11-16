@@ -30,7 +30,7 @@ from modules import dialogs
 from modules.app_updater import fetch_remote_version, is_newer_version, download_update, restart_with_update
 from modules.dialogs import _center_window, centered_info, centered_warning, centered_error
 from modules.dialogs import centered_askyesno, centered_askchecklist, centered_askchoice, centered_askselect
-from modules.dialogs import centered_asklogin, add_tooltip
+from modules.dialogs import centered_asklogin, centered_askstring, add_tooltip
 from modules.data_manager import load_data, save_data, load_settings_and_paths, get_task_data
 from modules.data_manager import save_settings_and_path as _save_recent_path
 from modules.data_manager import find_latest_task_for_path, find_tasks_for_path, get_current_task_base_path, load_task_ids
@@ -72,7 +72,7 @@ from modules.feature_server import launch_feature_services, prepare_schrep_plugi
 from modules.feature_server import set_schrep_guid
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.7.0.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.8.0.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -2041,7 +2041,7 @@ def _on_task_id_change(*_):
     on_task_selected(None)
 
 _prev_task_id = task_id_var.get().strip()
-task_id_var.trace_add("write", _on_task_id_change)
+_task_id_trace_id = task_id_var.trace_add("write", _on_task_id_change)
 
 # ======================= Панель задач слева =======================
 _task_panel_state = None  # (задачи, задачи версии, выбранная) — перерисовываем только при изменениях
@@ -2569,6 +2569,103 @@ def delete_task(confirm=True):
     # centered_info("Успех", result_msg)
 
 
+def rename_task(old_task_id=None):
+    """Переименовывает задачу: папки, записи в JSON, INI и ярлыки."""
+    if old_task_id is None:
+        old_task_id = task_id_var.get().strip()
+    if not old_task_id:
+        centered_warning("Предупреждение", "Выберите задачу для переименования!")
+        return
+
+    data = load_data()
+    tasks = data.get("tasks", {})
+
+    if old_task_id not in tasks:
+        centered_warning("Предупреждение", f"Задача {old_task_id} не найдена!")
+        return
+
+    new_task_id = centered_askstring("Переименовать задачу", f"Новое имя для задачи {old_task_id}:")
+    if new_task_id is None:
+        return
+    new_task_id = new_task_id.strip()
+    if not new_task_id:
+        centered_warning("Предупреждение", "Введите новое имя задачи.")
+        return
+    if new_task_id == old_task_id:
+        return
+    if new_task_id in tasks:
+        centered_warning("Предупреждение", f"Задача с именем {new_task_id} уже существует!")
+        return
+
+    task_info = tasks[old_task_id]
+
+    def _replace_task_id_in_path(path, old_id, new_id):
+        if not path:
+            return path
+        return path.replace("\\", "/").replace(f"/{old_id}/", f"/{new_id}/")
+
+    entries = [(task_info.get("ini_path"), task_info.get("base_path"), task_info.get("midbase_path"))]
+    for ver_info in task_info.get("versions", {}).values():
+        entries.append((ver_info.get("ini_path"), ver_info.get("base_path"), ver_info.get("midbase_path")))
+
+    failed = []
+
+    for ini_path, _, _ in entries:
+        if not ini_path:
+            continue
+        product_root = find_product_root(ini_path)
+        if not product_root:
+            continue
+        old_task_folder = os.path.join(product_root, old_task_id)
+        new_task_folder = os.path.join(product_root, new_task_id)
+        if os.path.isdir(old_task_folder):
+            if os.path.isdir(new_task_folder):
+                centered_error("Ошибка", f"Папка {new_task_folder} уже существует!")
+                return
+            try:
+                os.rename(old_task_folder, new_task_folder)
+            except Exception as e:
+                failed.append((old_task_folder, str(e)))
+
+        rk7srv_ini = os.path.join(ini_path, "rk7srv.INI")
+        if os.path.isfile(rk7srv_ini):
+            update_rk7srv_ini(rk7srv_ini, os.path.join(new_task_id, "base").replace("\\", "/"))
+        update_rkeeper_ini_basepath(ini_path, os.path.join(new_task_id, "MIDBASE").replace("\\", "/"))
+
+    if failed:
+        error_details = "\n".join(f"• {src}: {err}" for src, err in failed)
+        centered_error("Ошибка", f"Не удалось переименовать некоторые папки:\n{error_details}")
+        return
+
+    task_info["base_path"] = _replace_task_id_in_path(task_info.get("base_path"), old_task_id, new_task_id)
+    task_info["midbase_path"] = _replace_task_id_in_path(task_info.get("midbase_path"), old_task_id, new_task_id)
+    for ver_info in task_info.get("versions", {}).values():
+        ver_info["base_path"] = _replace_task_id_in_path(ver_info.get("base_path"), old_task_id, new_task_id)
+        ver_info["midbase_path"] = _replace_task_id_in_path(ver_info.get("midbase_path"), old_task_id, new_task_id)
+
+    tasks[new_task_id] = task_info
+    del tasks[old_task_id]
+    tasks = {new_task_id: tasks[new_task_id], **{k: v for k, v in tasks.items() if k != new_task_id}}
+    data["tasks"] = tasks
+    save_data(data)
+
+    for ini_path, _, _ in entries:
+        if not ini_path:
+            continue
+        product_root = find_product_root(ini_path)
+        if not product_root:
+            continue
+        new_task_folder = os.path.join(product_root, new_task_id)
+        if os.path.isdir(new_task_folder):
+            create_task_shortcuts(new_task_folder, ini_path)
+
+    set_task_ids(load_task_ids())
+    task_id_var.set(new_task_id)
+    refresh_task_panel()
+
+    centered_info("Успех", f"Задача {old_task_id} переименована в {new_task_id}")
+
+
 add_task_btn = tk.Button(
     task_panel,
     text="Добавить",
@@ -2577,6 +2674,30 @@ add_task_btn = tk.Button(
 )
 add_task_btn.pack(fill="x", padx=4, pady=(0, 4), before=task_list_frame)
 add_tooltip(add_task_btn, "Создать задачу из базы выбранной версии RK")
+
+# Контекстное меню для списка задач
+task_context_menu = tk.Menu(task_listbox, tearoff=0)
+task_context_menu.add_command(label="Переименовать", command=lambda: rename_task())
+task_context_menu.add_command(label="Удалить", command=lambda: delete_task())
+
+
+def _on_task_right_click(event):
+    """ПКМ по задаче — выделить, активировать и показать контекстное меню."""
+    global _task_id_trace_id
+    index = task_listbox.nearest(event.y)
+    if index < 0 or index >= task_listbox.size():
+        return
+    task_listbox.selection_clear(0, "end")
+    task_listbox.selection_set(index)
+    task_listbox.see(index)
+    selected = task_listbox.get(index).strip()
+    task_id_var.trace_remove("write", _task_id_trace_id)
+    task_id_var.set(selected)
+    _task_id_trace_id = task_id_var.trace_add("write", _on_task_id_change)
+    task_context_menu.post(event.x_root, event.y_root)
+
+
+task_listbox.bind("<Button-3>", _on_task_right_click)
 
 # Выбор пути
 path_frame = tk.Frame(path_task_frame)
