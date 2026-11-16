@@ -326,6 +326,24 @@ def kill_processes_for_version_change():
         time.sleep(2)
     return killed
 
+
+def kill_rk_processes_for_task_operation():
+    """Завершает процессы RK, которые могут блокировать папки задачи."""
+    import psutil
+    killed = []
+    target_names = {'refsrv.exe', 'rk7man.exe', 'midserv.exe', 'wincash.exe', 'doscash.exe', 'rk7srv.exe'}
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            name = proc.info['name']
+            if name and name.lower() in target_names:
+                proc.terminate()
+                killed.append(name)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    if killed:
+        time.sleep(2)
+    return killed
+
 # ======================= Комбинированные операции =======================
 
 def run_refsrv_and_rk7man(ini_path):

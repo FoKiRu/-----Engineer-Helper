@@ -42,6 +42,7 @@ from modules.ini_utils import update_rk7srv_ini, get_ini_settings, check_files, 
 from modules.ini_utils import get_rk7srv_udb_workmodules, get_usedbsync_values
 from modules.process_utils import kill_midserv, kill_doscash
 from modules.process_utils import kill_processes_for_version_change, get_used_ports, get_process_by_name, is_process_running
+from modules.process_utils import kill_rk_processes_for_task_operation
 from modules.process_utils import get_port_info, get_rk7man_port_info, get_process_listening_ports
 from modules.process_utils import has_visible_window_for_pid
 from modules.process_utils import launch_refsrv, wait_and_launch_refsrv
@@ -72,7 +73,7 @@ from modules.feature_server import launch_feature_services, prepare_schrep_plugi
 from modules.feature_server import set_schrep_guid
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.8.1.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.8.2.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -2612,8 +2613,7 @@ def rename_task(old_task_id=None):
     for ver_info in task_info.get("versions", {}).values():
         entries.append((ver_info.get("ini_path"), ver_info.get("base_path"), ver_info.get("midbase_path")))
 
-    failed = []
-
+    rename_items = []
     for ini_path, _, _ in entries:
         if not ini_path:
             continue
@@ -2622,24 +2622,42 @@ def rename_task(old_task_id=None):
             continue
         old_task_folder = os.path.join(product_root, old_task_id)
         new_task_folder = os.path.join(product_root, new_task_id)
-        if os.path.isdir(old_task_folder):
-            if os.path.isdir(new_task_folder):
-                centered_error("Ошибка", f"Папка {new_task_folder} уже существует!")
-                return
-            try:
-                os.rename(old_task_folder, new_task_folder)
-            except Exception as e:
-                failed.append((old_task_folder, str(e)))
+        rename_items.append((old_task_folder, new_task_folder, ini_path))
 
+    def _do_rename():
+        failed_local = []
+        for old_folder, new_folder, _ in rename_items:
+            if os.path.isdir(old_folder):
+                if os.path.isdir(new_folder):
+                    failed_local.append((old_folder, f"Папка {new_folder} уже существует"))
+                    continue
+                try:
+                    os.rename(old_folder, new_folder)
+                except Exception as e:
+                    failed_local.append((old_folder, str(e)))
+        return failed_local
+
+    failed = _do_rename()
+
+    if failed and any("доступ" in err.lower() or "access" in err.lower() or "winerror 5" in err.lower()
+                      for _, err in failed):
+        if centered_askyesno("Папка заблокирована",
+                "Не удалось переименовать папку: возможно, она используется процессами R-Keeper.\n"
+                "Закрыть процессы RK (refsrv, rk7man, midserv, wincash, doscash) и повторить?"):
+            kill_rk_processes_for_task_operation()
+            failed = _do_rename()
+
+    if failed:
+        error_details = "\n".join(f"• {src}: {err}" for src, err in failed)
+        centered_error("Ошибка", f"Не удалось переименовать некоторые папки:\n{error_details}\n\n"
+                               "Закройте окна Проводника с этими папками и попробуйте снова.")
+        return
+
+    for _, _, ini_path in rename_items:
         rk7srv_ini = os.path.join(ini_path, "rk7srv.INI")
         if os.path.isfile(rk7srv_ini):
             update_rk7srv_ini(rk7srv_ini, os.path.join(new_task_id, "base").replace("\\", "/"))
         update_rkeeper_ini_basepath(ini_path, os.path.join(new_task_id, "MIDBASE").replace("\\", "/"))
-
-    if failed:
-        error_details = "\n".join(f"• {src}: {err}" for src, err in failed)
-        centered_error("Ошибка", f"Не удалось переименовать некоторые папки:\n{error_details}")
-        return
 
     task_info["base_path"] = _replace_task_id_in_path(task_info.get("base_path"), old_task_id, new_task_id)
     task_info["midbase_path"] = _replace_task_id_in_path(task_info.get("midbase_path"), old_task_id, new_task_id)
