@@ -194,3 +194,128 @@ def database_exists(server, database, windows_auth=True, username="", password="
     if answer not in ("0", "1"):
         raise SqlDatabaseError("SQL Server вернул неожиданный ответ при проверке базы данных.")
     return answer == "1"
+
+
+_DROP_DATABASE_SCRIPT = r"""
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$ErrorActionPreference = 'Stop'
+try {
+    $builder = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
+    $builder['Data Source'] = $env:ENGIHELP_SQL_SERVER
+    $builder['Initial Catalog'] = 'master'
+    $builder['Connect Timeout'] = 15
+    $builder['Application Name'] = 'EngiHelp'
+    if ($env:ENGIHELP_SQL_WINDOWS_AUTH -eq '1') {
+        $builder['Integrated Security'] = $true
+    } else {
+        $builder['Integrated Security'] = $false
+        $builder['User ID'] = $env:ENGIHELP_SQL_USER
+        $builder['Password'] = $env:ENGIHELP_SQL_PASSWORD
+    }
+
+    $connection = New-Object System.Data.SqlClient.SqlConnection($builder.ConnectionString)
+    try {
+        $connection.Open()
+        $listCommand = $connection.CreateCommand()
+        $listCommand.CommandText = @'
+SELECT name
+FROM sys.databases
+WHERE name = @DatabaseName
+   OR LEFT(name, LEN(@DatabaseName) + 6) = @DatabaseName + N'_STAT_'
+ORDER BY CASE WHEN name = @DatabaseName THEN 0 ELSE 1 END, name;
+'@
+        $listCommand.Parameters.AddWithValue('@DatabaseName', $env:ENGIHELP_SQL_DATABASE) | Out-Null
+        $databaseNames = @()
+        $reader = $listCommand.ExecuteReader()
+        try {
+            while ($reader.Read()) {
+                $databaseNames += [string]$reader['name']
+            }
+        } finally {
+            $reader.Close()
+            $reader.Dispose()
+        }
+        if ($databaseNames.Count -eq 0) {
+            [Console]::WriteLine('0')
+            return
+        }
+
+        foreach ($databaseName in $databaseNames) {
+            $dropCommand = $connection.CreateCommand()
+            $dropCommand.CommandTimeout = 30
+            $dropCommand.CommandText = @'
+DECLARE @QuotedName nvarchar(258) = QUOTENAME(@DatabaseName);
+DECLARE @Sql nvarchar(max) = N'ALTER DATABASE ' + @QuotedName + N' SET SINGLE_USER WITH ROLLBACK IMMEDIATE;';
+EXEC sys.sp_executesql @Sql;
+SET @Sql = N'DROP DATABASE ' + @QuotedName + N';';
+EXEC sys.sp_executesql @Sql;
+'@
+            $dropCommand.Parameters.AddWithValue('@DatabaseName', $databaseName) | Out-Null
+            try {
+                $dropCommand.ExecuteNonQuery() | Out-Null
+            } finally {
+                $dropCommand.Dispose()
+            }
+        }
+        [Console]::WriteLine('1')
+    } finally {
+        if ($connection.State -ne [System.Data.ConnectionState]::Closed) {
+            $connection.Close()
+        }
+        $connection.Dispose()
+    }
+} catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+}
+"""
+
+
+def drop_database(server, database, windows_auth=True, username="", password=""):
+    server = server.strip()
+    database = database.strip()
+    username = username.strip()
+    if not server:
+        raise SqlDatabaseError("Укажите адрес SQL Server.")
+    if not database:
+        raise SqlDatabaseError("Укажите имя базы данных.")
+    if len(database) > 128:
+        raise SqlDatabaseError("Имя базы данных не должно превышать 128 символов.")
+    if "\x00" in database:
+        raise SqlDatabaseError("Имя базы данных содержит недопустимый символ.")
+    if not windows_auth and not username:
+        raise SqlDatabaseError("Укажите имя пользователя SQL Server.")
+
+    env = os.environ.copy()
+    env["ENGIHELP_SQL_SERVER"] = server
+    env["ENGIHELP_SQL_DATABASE"] = database
+    env["ENGIHELP_SQL_WINDOWS_AUTH"] = "1" if windows_auth else "0"
+    env["ENGIHELP_SQL_USER"] = "" if windows_auth else username
+    env["ENGIHELP_SQL_PASSWORD"] = "" if windows_auth else password
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-Command", _DROP_DATABASE_SCRIPT,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            timeout=50,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except FileNotFoundError as e:
+        raise SqlDatabaseError("Не найден PowerShell, необходимый для подключения к SQL Server.") from e
+    except subprocess.TimeoutExpired as e:
+        raise SqlDatabaseError("Превышено время ожидания ответа SQL Server.") from e
+
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout).strip()
+        raise SqlDatabaseError(details or "SQL Server не смог удалить базу данных.")
+    answer = result.stdout.strip()
+    if answer not in ("0", "1"):
+        raise SqlDatabaseError("SQL Server вернул неожиданный ответ при удалении базы данных.")
+    return answer == "1"

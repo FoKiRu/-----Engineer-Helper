@@ -499,13 +499,18 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
     sql_frame.pack(fill="x", padx=12, pady=(0, 8))
     sql_frame.grid_columnconfigure(1, weight=1)
 
+    task_sql = task_info.get("sql_database", {})
     sql_enabled_var = tk.BooleanVar(value=saved.get("sql_enabled", True))
-    sql_server_var = tk.StringVar(value=saved.get("sql_server", sql_saved.get("server", "localhost")))
-    sql_database_var = tk.StringVar(value=f"RK7_{task_id}")
-    windows_auth_var = tk.BooleanVar(value=saved.get(
-        "sql_windows_auth", sql_saved.get("windows_auth", True)
+    sql_server_var = tk.StringVar(value=task_sql.get(
+        "server", saved.get("sql_server", sql_saved.get("server", "localhost"))
     ))
-    username_var = tk.StringVar(value=saved.get("sql_username", sql_saved.get("username", "")))
+    sql_database_var = tk.StringVar(value=task_sql.get("database", f"RK7_{task_id}"))
+    windows_auth_var = tk.BooleanVar(value=task_sql.get("windows_auth", saved.get(
+        "sql_windows_auth", sql_saved.get("windows_auth", True)
+    )))
+    username_var = tk.StringVar(value=task_sql.get(
+        "username", saved.get("sql_username", sql_saved.get("username", ""))
+    ))
     password_var = tk.StringVar()
 
     sql_check = tk.Checkbutton(sql_frame, text="Настроить подключение Feature Server к SQL", variable=sql_enabled_var)
@@ -836,6 +841,13 @@ def feature_server_dialog(root, task_id, ini_path, base_path, icon_path=None):
                     current_task["run_fs_cs_with_rk7man"] = launch_services_var.get()
                     current_task["schrep_fs_guid"] = schrep_guid
                     current_task["cs_service_path"] = options["cs_path"]
+                    if sql_enabled:
+                        current_task["sql_database"] = {
+                            "server": options["sql_server"],
+                            "database": options["sql_database"],
+                            "windows_auth": windows_auth,
+                            "username": "" if windows_auth else options["sql_username"],
+                        }
                 save_data(current_data)
                 set_busy(False)
                 status_var.set("Установка завершена")

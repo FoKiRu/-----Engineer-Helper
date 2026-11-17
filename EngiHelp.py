@@ -67,14 +67,14 @@ from modules.udb_api import default_operations as udb_default_operations, rk_ver
 from modules.udb_api import load_credential, save_credential, remove_credential, api_host
 from modules.udb_api import result_file as udb_result_file
 from modules.changelog import CHANGELOG
-from modules.sql_database import create_database as create_sql_database, SqlDatabaseError
+from modules.sql_database import create_database as create_sql_database, drop_database as drop_sql_database, SqlDatabaseError
 from modules.log_viewer import open_log_viewer
 from modules.feature_server import feature_server_dialog, FeatureServerError
 from modules.feature_server import launch_feature_services, prepare_schrep_plugin, restore_schrep_plugin
 from modules.feature_server import set_schrep_guid
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.9.0.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.10.0.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -2441,6 +2441,15 @@ def add_task():
     if current_product_root:
         versions_dir = os.path.dirname(current_product_root)
         selected_path = os.path.join(versions_dir, f"INST{selected_version}", "bin", "win").replace("\\", "/")
+        if not ensure_ini_files(selected_path):
+            return
+        missing = [f for f in FILES if not os.path.isfile(os.path.join(selected_path, f))]
+        if missing:
+            centered_error(
+                "Ошибка",
+                f"Не удалось подготовить INI-файлы новой версии:\n{', '.join(missing)}"
+            )
+            return
         path_var.set(selected_path)
 
     task_id_var.set(task_id)
@@ -2449,8 +2458,32 @@ def add_task():
 
 # load_task_ids импортирована из modules.data_manager
 
+def _task_sql_settings(data, task_info, task_id):
+    task_sql = task_info.get("sql_database", {})
+    feature_sql = data.get("settings", {}).get("feature_server", {})
+    saved_sql = data.get("settings", {}).get("sql_database", {})
+    if task_sql:
+        sql_settings = task_sql
+    elif feature_sql.get("sql_enabled") and feature_sql.get("sql_server"):
+        sql_settings = feature_sql
+    else:
+        sql_settings = saved_sql
+
+    server = sql_settings.get("server") or sql_settings.get("sql_server", "")
+    if not server:
+        return None
+    return {
+        "server": server,
+        "database": task_sql.get("database") or f"RK7_{task_id}",
+        "windows_auth": sql_settings.get(
+            "windows_auth", sql_settings.get("sql_windows_auth", True)
+        ),
+        "username": sql_settings.get("username") or sql_settings.get("sql_username", ""),
+    }
+
+
 def delete_task(confirm=True):
-    """Удаляет выбранную задачу: папки base/MIDBASE, папки задачи со ярлыками и запись в JSON.
+    """Удаляет задачу, её папки, запись в JSON и связанную базу SQL, если она существует.
     confirm=False — без окна подтверждения (уже спросили, например когда папка задачи не найдена)."""
     selected_task_id = task_id_var.get().strip()
     if not selected_task_id:
@@ -2465,6 +2498,7 @@ def delete_task(confirm=True):
         return
 
     task_info = tasks[selected_task_id]
+    sql_settings = _task_sql_settings(data, task_info, selected_task_id)
 
     # === Собираем ВСЕ пути base и midbase (основной + из всех версий) ===
     all_paths = set()
@@ -2512,9 +2546,44 @@ def delete_task(confirm=True):
     if versions:
         ver_list = ", ".join(versions.keys())
         confirm_msg += f"\n\nВерсии RK в задаче: {ver_list}"
+    if sql_settings:
+        confirm_msg += (
+            f"\n\nЕсли существуют, база SQL «{sql_settings['database']}» и связанные базы FS "
+            f"«{sql_settings['database']}_STAT_*» на сервере {sql_settings['server']} "
+            f"также будут удалены."
+        )
 
     if confirm and not centered_askyesno("Подтверждение удаления", confirm_msg):
         return
+
+    sql_deleted = False
+    if sql_settings:
+        username = sql_settings["username"]
+        password = ""
+        if not sql_settings["windows_auth"]:
+            credentials = centered_asklogin(
+                "Удаление базы SQL",
+                f"Введите данные для удаления базы «{sql_settings['database']}» "
+                f"и связанных баз FS на сервере {sql_settings['server']}.",
+                login=username,
+            )
+            if credentials is None:
+                return
+            username, password = credentials
+        try:
+            sql_deleted = drop_sql_database(
+                sql_settings["server"], sql_settings["database"],
+                sql_settings["windows_auth"], username, password,
+            )
+            if sql_deleted:
+                print(f"[OK] База SQL и связанные базы FS удалены: {sql_settings['database']}")
+        except SqlDatabaseError as e:
+            if not centered_askyesno(
+                "Ошибка удаления базы SQL",
+                f"{e}\n\nПродолжить удаление задачи без удаления базы "
+                f"«{sql_settings['database']}» и связанных баз FS?"
+            ):
+                return
 
     # === Шаг 0: Восстанавливаем дефолтные INI-настройки для всех связанных путей ===
     ini_paths_to_restore = set()
@@ -5236,6 +5305,14 @@ def open_sql_database_dialog():
                     "windows_auth": windows_auth,
                     "username": "" if windows_auth else username,
                 }
+                current_task = data.get("tasks", {}).get(selected_task_id)
+                if current_task is not None:
+                    current_task["sql_database"] = {
+                        "server": server,
+                        "database": created_name,
+                        "windows_auth": windows_auth,
+                        "username": "" if windows_auth else username,
+                    }
                 save_data(data)
                 win.destroy()
                 centered_info(

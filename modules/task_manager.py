@@ -96,14 +96,20 @@ def find_available_rk_versions(path):
 # ======================= Создание задачи и подписи =======================
 
 def get_new_task_ini_settings(version_path, data=None):
-    """Возвращает дефолтные настройки версии, а при их отсутствии — текущие настройки INI."""
+    """Возвращает дефолтные настройки версии, при отсутствии сохраняет их из текущих INI."""
     if data is None:
         data = load_data()
     key = version_path.replace("\\", "/").rstrip("/")
     default_entry = data.get("defaults", {}).get(key)
     if default_entry is not None:
         return copy.deepcopy(default_entry.get("ini_settings", {}))
-    return get_ini_settings(version_path)
+    settings = get_ini_settings(version_path)
+    data.setdefault("defaults", {})[key] = {
+        "ini_path": version_path.replace("\\", "/"),
+        "ini_settings": copy.deepcopy(settings),
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    return settings
 
 
 def create_task_for_version(task_id, version_path):
