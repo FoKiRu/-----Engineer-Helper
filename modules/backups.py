@@ -1,6 +1,6 @@
 # ======================= backups.py =======================
 # Автоматические бэкапы базы, которые делает refsrv:
-# {base задачи}\backups\databases\ГГГГ.ММ.ДД.at.ЧЧ.ММ\ (rk7.udb, check.udb, rk7log.udb ...)
+# {base задачи}\backups\databases\ГГГГ.ММ.ДД.at.ЧЧ.ММ\ (rk7.udb или rk7.SQLite, check.udb, rk7log.udb ...)
 # Лишние старые бэкапы удаляются — остаются последние N по каждой папке base.
 
 import os

@@ -46,6 +46,7 @@ from modules.process_utils import kill_rk_processes_for_task_operation, get_runn
 from modules.process_utils import get_port_info, get_rk7man_port_info, get_process_listening_ports
 from modules.process_utils import has_visible_window_for_pid
 from modules.process_utils import launch_refsrv, wait_and_launch_refsrv
+from modules.reference_db import is_reference_db_name, reference_db_name, reference_db_path, supports_sqlite
 from modules.cloud_rk7man import cloud_rk7man_dialog
 from modules.shortcuts import create_task_shortcuts
 from modules.task_manager import extract_task_id_from_rk7srv_ini, find_product_root
@@ -73,7 +74,7 @@ from modules.feature_server import launch_feature_services, prepare_schrep_plugi
 from modules.feature_server import set_schrep_guid
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.8.4.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.9.0.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -96,7 +97,7 @@ FEATURES = [
         "очистка base и MIDBASE с резервной копией",
         "автоматическое удаление старых бэкапов refsrv",
         "установка и удаление Feature Server, плагины Interactive Reports для RK7man",
-        "подготовка rk7.udb через API utils.ucs.ru (вкладка «База»)",
+        "подготовка rk7.udb и rk7.SQLite через API utils.ucs.ru (вкладка «База»)",
         "копирование перетащенных файлов в base выбранной задачи",
     ]),
     ("Программа", [
@@ -1389,7 +1390,7 @@ def change_rk_version():
 
 
 def perform_version_change(task_id, current_version, target_version, target_dir=None):
-    """Выполняет перенос базы задачи в другую версию RK с заменой только rk7.udb."""
+    """Переносит задачу в другую версию RK с заменой только базы справочников."""
     data = load_data()
     tasks = data.get("tasks", {})
     task_info = tasks.get(task_id)
@@ -1413,15 +1414,28 @@ def perform_version_change(task_id, current_version, target_version, target_dir=
         centered_error("Ошибка", f"Папка bin/win не найдена:\n{target_bin_win}")
         return
 
-    # Завершаем процессы
-    kill_processes_for_version_change()
-
     # Пути к base
     current_base_path = task_info.get("base_path")
     if not current_base_path or not os.path.isdir(current_base_path):
         centered_error("Ошибка", f"Папка base для задачи не найдена:\n{current_base_path}")
         return
-    
+
+    source_db = reference_db_path(current_base_path, current_version)
+    legacy_udb = os.path.join(current_base_path, "rk7.udb")
+    if not supports_sqlite(target_version) and os.path.isfile(legacy_udb):
+        source_db = legacy_udb
+    if (os.path.isfile(source_db) and os.path.basename(source_db).lower() == "rk7.sqlite"
+            and not supports_sqlite(target_version)):
+        centered_error(
+            "Перенос базы",
+            f"rk7.SQLite поддерживается начиная с R-Keeper 7.26.11.2001.\n"
+            f"Нельзя перенести эту базу в версию {target_version}."
+        )
+        return
+
+    # Завершаем процессы
+    kill_processes_for_version_change()
+
     # Новый формат: .../197034/base
     base_name = os.path.basename(current_base_path)  # "base" или "base_197034"
     base_parent = os.path.basename(os.path.dirname(current_base_path))  # task_id или product_root
@@ -1467,13 +1481,11 @@ def perform_version_change(task_id, current_version, target_version, target_dir=
                     else:
                         shutil.copy2(src_item, dst_item)
         
-        # 2. Копируем только rk7.udb из старой базы
-        src_udb = os.path.join(current_base_path, "rk7.udb")
-        dst_udb = os.path.join(target_base_path, "rk7.udb")
-        if os.path.exists(src_udb):
-            shutil.copy2(src_udb, dst_udb)
+        # 2. Копируем базу справочников из старой base. UDB в новой версии refsrv преобразует сам.
+        if os.path.isfile(source_db):
+            shutil.copy2(source_db, os.path.join(target_base_path, os.path.basename(source_db)))
         else:
-            centered_warning("Внимание", "Файл rk7.udb не найден в исходной базе!")
+            centered_warning("Внимание", "Файл rk7.udb или rk7.SQLite не найден в исходной базе!")
 
         print(f"Base перенесена: {target_base_path}")
     except Exception as e:
@@ -2211,11 +2223,12 @@ def save_task_id():
     )
 
     if refsrv_running:
-        test_file = os.path.join(base_path, "rk7.udb")
+        test_file = reference_db_path(base_path, extract_rk_version_from_path(path_var.get()))
         if os.path.exists(test_file):
+            test_copy = os.path.join(product_root, os.path.basename(test_file) + ".test")
             try:
-                shutil.copy2(test_file, os.path.join(product_root, "rk7.udb.test"))
-                os.remove(os.path.join(product_root, "rk7.udb.test"))
+                shutil.copy2(test_file, test_copy)
+                os.remove(test_copy)
             except PermissionError:
                 if centered_askyesno(
                     "Предупреждение",
@@ -2245,7 +2258,7 @@ def save_task_id():
         else:
             return
 
-    # Список файлов и папок, которые нужно скопировать из base (без rk7.udb)
+    # Список файлов и папок, которые нужно скопировать из base (без базы справочников)
     files_to_copy = [
         "drvlocalize", "workmods", "dealerpresets.udb",
         "upgradedevices.abs", "upgradepresets.abs"
@@ -2330,7 +2343,8 @@ def save_task_id():
     # Обновляем rk7srv.INI: передаём путь {task_id}\base
     base_dir = os.path.join(task_id, "base")
     rk7srv_ini_path = os.path.join(path_var.get(), "rk7srv.INI")
-    update_rk7srv_ini(rk7srv_ini_path, base_dir)
+    rk_version = extract_rk_version_from_path(path_var.get())
+    update_rk7srv_ini(rk7srv_ini_path, base_dir, reference_db_name(base_path, rk_version))
 
     # Создаём ярлыки
     create_task_shortcuts(task_folder, path_var.get())
@@ -3097,7 +3111,7 @@ def delete_unwanted_files():
     # Список файлов и папок, которые НЕ должны быть удалены
     protected_files = [
         "drvlocalize", "workmods", "dealerpresets.udb",
-        "ral.dat", "rk7.udb", "upgradedevices.abs", "upgradepresets.abs"
+        "ral.dat", "rk7.udb", "rk7.SQLite", "upgradedevices.abs", "upgradepresets.abs"
     ]
 
     # Создаем колбэки с уже определенным путем
@@ -4687,7 +4701,7 @@ for _btn, _tip in (
     (check_btn, "Найти задачу по номеру в Service Desk (sd.rkeeper.ru)"),
     (show_folders_btn, "Удалить файлы из MIDBASE задачи. Можно оставить WORK.UDB, "
                        "Archive, Backup и refsdata.udb и сделать резервную копию"),
-    (clear_base_btn, "Удалить лишнее из base задачи — rk7.udb, ral.dat, dealerpresets.udb "
+    (clear_base_btn, "Удалить лишнее из base задачи — rk7.udb, rk7.SQLite, ral.dat, dealerpresets.udb "
                      "и другие нужные файлы остаются. Можно сделать резервную копию"),
     (delete_task_btn, "Удалить задачу: папки base и MIDBASE, папку задачи и запись в списке задач"),
     (change_version_btn, "Перенести базу задачи в другую версию RK (refsrv и RK7man будут закрыты)"),
@@ -4729,8 +4743,8 @@ def check_for_updates(silent=False):
             centered_error("Ошибка", f"Не удалось обновить:\n{e}")
 
 # ======================= Вкладка "База" =======================
-# Подготовка rk7.udb выбранной задачи через API utils.ucs.ru: сброс дилера, AddDealerFromRal,
-# код предприятия, отключение проверки лицензии обновления, деактивация ресторанов.
+# Подготовка rk7.udb или rk7.SQLite выбранной задачи через API utils.ucs.ru: сброс дилера,
+# AddDealerFromRal, код предприятия, отключение проверки лицензии обновления, деактивация ресторанов.
 udb_tab = tk.Frame(notebook)
 notebook.add(udb_tab, text="База")
 
@@ -4752,13 +4766,14 @@ udb_param_vars = {
 _udb_state = {"key": None, "busy": False}
 
 def _udb_current():
-    """(задача, путь к rk7.udb, версия R-Keeper) выбранной задачи; путь None — задачи нет."""
+    """(задача, путь к базе справочников, версия R-Keeper); путь None — задачи нет."""
     task_id = task_id_var.get().strip()
     task_info = get_task_data(task_id) if task_id else None
     if not task_info or not task_info.get("base_path"):
         return task_id, None, rk_version_from_ini_path(ini_path)
-    udb_path = os.path.normpath(os.path.join(task_info["base_path"], "rk7.udb"))
-    return task_id, udb_path, rk_version_from_ini_path(task_info.get("ini_path") or ini_path)
+    rk_version = rk_version_from_ini_path(task_info.get("ini_path") or ini_path)
+    udb_path = reference_db_path(task_info["base_path"], rk_version)
+    return task_id, udb_path, rk_version
 
 def refresh_udb_tab(force=False):
     """Обновляет сведения о базе задачи. При смене задачи или версии подставляет версию R-Keeper
@@ -4878,7 +4893,9 @@ def _udb_run(job, label):
     threading.Thread(target=run, daemon=True).start()
 
 def _udb_release_file(task_id, udb_path):
-    """rk7.udb занят refsrv — предлагает закрыть refsrv этой задачи. True — файл свободен."""
+    """Предлагает закрыть refsrv этой задачи, если база занята. True — файл свободен."""
+    db_name = os.path.basename(udb_path)
+
     def _locked():
         try:
             with open(udb_path, "r+b"):
@@ -4892,13 +4909,13 @@ def _udb_release_file(task_id, udb_path):
     procs = [p for p, d in get_process_by_name('refsrv.exe') if d == exe_dir and _is_same_refsrv(p, d)]
     if not procs and not _locked():
         return True
-    if not centered_askyesno("rk7.udb занят",
+    if not centered_askyesno(f"{db_name} занят",
                              f"База задачи {task_id} открыта в refsrv:\n{udb_path}\n\n"
                              f"Закрыть refsrv этой задачи и продолжить?"):
         return False
     alive = _kill_and_wait(procs)
     if alive or _locked():
-        centered_error("rk7.udb занят", "Не удалось освободить rk7.udb — закройте refsrv вручную.")
+        centered_error(f"{db_name} занят", f"Не удалось освободить {db_name} — закройте refsrv вручную.")
         return False
     return True
 
@@ -4918,8 +4935,11 @@ def _copy_dropped_file(source, destination):
 
 def _dropped_file_name(path):
     name = os.path.basename(path)
-    if name.lower().startswith("rk7") and name.lower().endswith(".udb"):
+    lower_name = name.lower()
+    if lower_name.startswith("rk7") and lower_name.endswith(".udb"):
         return "rk7.udb"
+    if lower_name.startswith("rk7") and lower_name.endswith(".sqlite"):
+        return "rk7.SQLite"
     return name
 
 
@@ -4959,11 +4979,11 @@ def on_files_dropped(event):
     if not centered_askyesno("Перетаскивание файлов", message):
         return "copy"
 
-    udb_targets = [
+    db_targets = [
         destinations[path] for path in files
-        if os.path.basename(destinations[path]).lower() == "rk7.udb"
+        if is_reference_db_name(os.path.basename(destinations[path]))
     ]
-    if udb_targets and not _udb_release_file(task_id, udb_targets[0]):
+    if db_targets and not _udb_release_file(task_id, db_targets[0]):
         return "copy"
 
     copied, errors = [], []
@@ -4988,9 +5008,7 @@ def on_files_dropped(event):
 
 
 def udb_process():
-    """Отправляет rk7.udb выбранной задачи на utils.ucs.ru, выполняет отмеченные операции,
-    скачивает результат на место исходного файла (исходный — в rk7.udb.before_api)
-    и удаляет копию базы с сервера."""
+    """Подготавливает базу выбранной задачи через utils.ucs.ru и сохраняет исходник в .before_api."""
     if _udb_state["busy"]:
         return
     task_id, udb_path, _ = _udb_current()
@@ -5000,6 +5018,7 @@ def udb_process():
     if not os.path.isfile(udb_path):
         centered_error("База", f"Файл не найден:\n{udb_path}")
         return
+    db_name = os.path.basename(udb_path)
     ops = [op for op, _ in UDB_OPERATIONS if udb_op_vars[op].get()]
     if not ops:
         centered_warning("База", "Отметьте хотя бы одну операцию.")
@@ -5030,8 +5049,8 @@ def udb_process():
     titles = "\n".join(f"• {UDB_OPERATION_TITLES[op]}" for op in ops)
     if not centered_askyesno(
             "Подготовка базы",
-            f"Отправить rk7.udb задачи {task_id} ({format_size(os.path.getsize(udb_path))}) на {host} "
-            f"и выполнить:\n{titles}\n\nИсходный файл сохранится как rk7.udb.before_api."):
+            f"Отправить {db_name} задачи {task_id} ({format_size(os.path.getsize(udb_path))}) на {host} "
+            f"и выполнить:\n{titles}\n\nИсходный файл сохранится как {db_name}.before_api."):
         return
 
     def job():
@@ -5062,7 +5081,7 @@ def udb_process():
             if result.get("params"):
                 udb_log("Параметры: " + ", ".join(f"{k}={v}" for k, v in result["params"].items()), "gray")
             if not result.get("succeeded"):
-                udb_log("Операции завершились с ошибками — rk7.udb не заменён", "error")
+                udb_log(f"Операции завершились с ошибками — {db_name} не заменён", "error")
                 return
             if not download:
                 # Ответ сервера сохраняем рядом с базой — по нему видно, в каком поле ссылка на файл
@@ -5070,16 +5089,16 @@ def udb_process():
                 with open(response_file, "w", encoding="utf-8") as f:
                     json.dump(result, f, ensure_ascii=False, indent=2)
                 udb_log(f"В ответе сервера нет ссылки на подготовленный файл (поля: "
-                        f"{', '.join(result)}) — rk7.udb не заменён. Ответ: {response_file}", "error")
+                        f"{', '.join(result)}) — {db_name} не заменён. Ответ: {response_file}", "error")
                 return
             prepared = udb_path + ".prepared"
             api.download(download, prepared, lambda d, t: udb_progress(d, t, "Скачивание"))
             try:
                 os.replace(prepared, udb_path)
             except OSError as e:
-                udb_log(f"Не удалось заменить rk7.udb ({e}). Подготовленная база: {prepared}", "error")
+                udb_log(f"Не удалось заменить {db_name} ({e}). Подготовленная база: {prepared}", "error")
                 return
-            udb_log(f"rk7.udb подготовлен. Исходный файл: {backup}", "ok")
+            udb_log(f"{db_name} подготовлен. Исходный файл: {backup}", "ok")
         finally:
             # Копия клиентской базы не должна оставаться на сервере
             if not file_id:
@@ -5239,7 +5258,7 @@ def open_sql_database_dialog():
     win.deiconify()
 
 
-tk.Label(udb_tab, text="Подготовка rk7.udb для стенда через utils.ucs.ru",
+tk.Label(udb_tab, text="Подготовка rk7.udb / rk7.SQLite через utils.ucs.ru",
          font=("TkDefaultFont", 9, "bold")).pack(padx=10, pady=(8, 2), anchor="w")
 udb_task_label = tk.Label(udb_tab, anchor="w", justify="left")
 udb_task_label.pack(padx=10, anchor="w")

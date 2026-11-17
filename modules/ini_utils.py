@@ -5,6 +5,8 @@ import re
 import shutil
 from collections import Counter
 
+from .reference_db import UDB_FILENAME, is_reference_db_name, reference_db_name
+
 FILES = ["RKEEPER.INI", "wincash.ini", "rk7srv.INI", "rk7man.ini"]
 
 def get_usedbsync_values(ini_path):
@@ -390,15 +392,31 @@ def update_rkeeper_ini_basepath(ini_path, midbase_folder_name):
         print(f"[ERROR] Ошибка обновления RKEEPER.INI: {e}")
         return False
 
-def update_rk7srv_ini(ini_path, base_dir):
+def update_rk7srv_ini(ini_path, base_dir, db_filename=None):
     """Обновляет UDBFILE и WorkModules в rk7srv.INI."""
     try:
         with open(ini_path, 'r', encoding='cp1251') as file:
             lines = file.readlines()
+        current_db = UDB_FILENAME
+        for line in lines:
+            match = re.match(r'^\s*UDBFILE\s*=\s*(.*)$', line, re.IGNORECASE)
+            if match:
+                name = os.path.basename(match.group(1).strip())
+                if is_reference_db_name(name):
+                    current_db = name
+                break
+        if not db_filename:
+            base_path = os.path.normpath(os.path.join(
+                os.path.dirname(ini_path), "..", "..", base_dir
+            ))
+            version = re.search(r'INST(7\.\d+\.\d+\.\d+)', ini_path, re.IGNORECASE)
+            db_filename = reference_db_name(
+                base_path, version.group(1) if version else "", default=current_db
+            )
         new_lines = []
         for line in lines:
             if re.match(r'^\s*UDBFILE\s*=', line, re.IGNORECASE):
-                new_lines.append(f"UDBFILE            = ..\\..\\{base_dir}\\rk7.udb\n")
+                new_lines.append(f"UDBFILE            = ..\\..\\{base_dir}\\{db_filename}\n")
             elif re.match(r'^\s*WorkModules\s*=', line, re.IGNORECASE):
                 new_lines.append(f"WorkModules        = ..\\..\\{base_dir}\\workmods\n")
             else:

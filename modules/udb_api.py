@@ -1,5 +1,5 @@
 # ======================= udb_api.py =======================
-# Подготовка базы справочников rk7.udb для стенда через API utils.ucs.ru (/v2/api):
+# Подготовка базы справочников rk7.udb или rk7.SQLite через API utils.ucs.ru (/v2/api):
 # сброс дилера, AddDealerFromRal, код предприятия, отключение проверки лицензии обновления,
 # для 7.25+ — деактивация ресторанов. Описание API — «ТЗ: API подготовки базы справочников rk7.udb».
 #
@@ -250,7 +250,7 @@ class UtilsApi:
         return response.json()
 
     def process(self, udb_path, ops, params, progress=None):
-        """Загрузка rk7.udb и выполнение операций (POST /refs/process). Возвращает ответ сервера."""
+        """Загрузка базы справочников и выполнение операций (POST /refs/process)."""
         fields = {"ops[]": list(ops)}
         fields.update(params)
         body = _MultipartStream(fields, "dbfile", udb_path, progress)
@@ -276,7 +276,7 @@ class UtilsApi:
                         progress(done, total)
         if expected and sha.hexdigest() != expected:
             os.remove(out_file)
-            raise ApiError("Скачанный rk7.udb повреждён (SHA-256 не совпадает)")
+            raise ApiError("Скачанная база повреждена (SHA-256 не совпадает)")
 
     def delete(self, file_id):
         """Удаляет папку загрузки на сервере (DELETE /files/{id})."""

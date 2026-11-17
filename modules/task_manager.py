@@ -11,6 +11,7 @@ import psutil
 
 from .data_manager import load_data, save_data
 from .ini_utils import update_rkeeper_ini_basepath, get_ini_settings, update_rk7srv_ini, get_port_value_for_path
+from .reference_db import reference_db_name, reference_db_path
 from .shortcuts import create_task_shortcuts
 
 # ======================= Вспомогательные функции =======================
@@ -129,11 +130,12 @@ def create_task_for_version(task_id, version_path):
     )
 
     if refsrv_running:
-        test_file = os.path.join(base_path, "rk7.udb")
+        test_file = reference_db_path(base_path, extract_rk_version_from_path(version_path))
         if os.path.exists(test_file):
+            test_copy = os.path.join(product_root, os.path.basename(test_file) + ".test")
             try:
-                shutil.copy2(test_file, os.path.join(product_root, "rk7.udb.test"))
-                os.remove(os.path.join(product_root, "rk7.udb.test"))
+                shutil.copy2(test_file, test_copy)
+                os.remove(test_copy)
             except PermissionError:
                 return False, "Файлы в папке base заблокированы процессом refsrv.exe"
             except Exception as e:
@@ -152,7 +154,7 @@ def create_task_for_version(task_id, version_path):
     if os.path.exists(new_base_path):
         return False, f"Папка {new_base_path} уже существует"
 
-    # Список файлов и папок, которые нужно скопировать из base (без rk7.udb)
+    # Список файлов и папок, которые нужно скопировать из base (без базы справочников)
     files_to_copy = [
         "drvlocalize", "workmods", "dealerpresets.udb",
         "upgradedevices.abs", "upgradepresets.abs"
@@ -208,7 +210,8 @@ def create_task_for_version(task_id, version_path):
     # Обновляем rk7srv.INI
     base_dir = os.path.join(task_id, "base")
     rk7srv_ini_path = os.path.join(version_path, "rk7srv.INI")
-    update_rk7srv_ini(rk7srv_ini_path, base_dir)
+    rk_version = extract_rk_version_from_path(version_path)
+    update_rk7srv_ini(rk7srv_ini_path, base_dir, reference_db_name(base_path, rk_version))
 
     # Создаём ярлыки
     create_task_shortcuts(task_folder, version_path)
