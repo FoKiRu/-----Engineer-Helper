@@ -38,7 +38,7 @@
 - `start_refsrv(path)` - запуск refsrv
 - `start_rk7man(path)` - запуск rk7man
 - `start_midserv(path)` - запуск midserv
-- `start_wincash(path)` - запуск wincash
+- `start_wincash(path)` - запуск wincash с остановкой после 50 неудачных попыток
 - `kill_refsrv(path)` - закрытие refsrv
 - `kill_rk7man(path)` - закрытие rk7man
 - `kill_midserv()` - закрытие midserv

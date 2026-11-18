@@ -226,8 +226,72 @@ def start_midserv(ini_path):
         print(f"Ошибка запуска midserv.exe: {e}")
         return False
 
-def start_wincash(ini_path):
-    """Запускает wincash.bat из текущей директории."""
+WINCASH_MAX_RESTARTS = 50
+_WINCASH_RESTART_MARKERS = ("перезапуск через 10 секунд", "server not found.")
+
+
+def _stop_wincash_process_tree(process):
+    try:
+        result = subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            timeout=10,
+        )
+        if result.returncode != 0 and process.poll() is None:
+            logging.error("Не удалось остановить WinCash: %s", result.stderr)
+    except (OSError, subprocess.SubprocessError) as e:
+        logging.error("Не удалось остановить WinCash: %s", e)
+
+
+def _watch_wincash_restarts(process, on_restart_limit=None):
+    restarts = 0
+    try:
+        for line in process.stdout:
+            if not any(marker in line.lower() for marker in _WINCASH_RESTART_MARKERS):
+                continue
+            restarts += 1
+            if restarts < WINCASH_MAX_RESTARTS:
+                continue
+            _stop_wincash_process_tree(process)
+            if on_restart_limit:
+                on_restart_limit()
+            else:
+                logging.warning("WinCash остановлен после %s неудачных попыток запуска", restarts)
+            break
+    except (OSError, ValueError) as e:
+        logging.debug("Завершено чтение вывода WinCash: %s", e)
+    finally:
+        if process.stdout:
+            process.stdout.close()
+
+
+def launch_wincash(ini_path, on_restart_limit=None):
+    """Запускает wincash.bat и останавливает его после 50 неудачных попыток."""
+    import threading
+
+    bat_path = os.path.join(ini_path, "wincash.bat")
+    process = subprocess.Popen(
+        ["cmd", "/c", bat_path],
+        cwd=ini_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="cp866",
+        errors="replace",
+        bufsize=1,
+    )
+    threading.Thread(
+        target=_watch_wincash_restarts,
+        args=(process, on_restart_limit),
+        daemon=True,
+        name=f"wincash-watch-{process.pid}",
+    ).start()
+    return process
+
+
+def start_wincash(ini_path, on_restart_limit=None):
+    """Запускает wincash.bat, ограничивая перезапуски 50 попытками."""
     import psutil
     ini_path_norm = os.path.normpath(ini_path).lower()
     for proc, exe_dir in get_process_by_name('doscash.exe'):
@@ -242,7 +306,7 @@ def start_wincash(ini_path):
         print(f"Файл не найден: {bat_path}")
         return False
     try:
-        subprocess.Popen([bat_path], shell=True, cwd=ini_path)
+        launch_wincash(ini_path, on_restart_limit)
         return True
     except Exception as e:
         print(f"Ошибка запуска wincash.bat: {e}")

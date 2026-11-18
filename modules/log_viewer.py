@@ -113,6 +113,7 @@ class _LogViewer:
         scrollbar.pack(side="right", fill="y")
         self.text.pack(side="left", fill="both", expand=True)
         self.text.bind("<MouseWheel>", self._on_mousewheel)
+        self.panel.bind("<Map>", self._show_initial_end)
 
     def _show_panel(self):
         self.parent.update_idletasks()
@@ -186,9 +187,10 @@ class _LogViewer:
             self.panel.pack_forget()
             self.parent.geometry(f"{max(1, width - self.panel_width)}x{height}")
 
-    def _show_initial_end(self):
+    def _show_initial_end(self, event=None):
         if self.panel is not None and self.panel.winfo_ismapped():
-            self.text.see("end")
+            self.text.update_idletasks()
+            self.text.yview_moveto(1.0)
 
 
 def open_log_viewer(parent, log_paths, tail_lines=200, before=None):

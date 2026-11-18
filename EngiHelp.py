@@ -45,7 +45,7 @@ from modules.process_utils import kill_processes_for_version_change, get_used_po
 from modules.process_utils import kill_rk_processes_for_task_operation, get_running_rk_processes
 from modules.process_utils import get_port_info, get_rk7man_port_info, get_process_listening_ports
 from modules.process_utils import has_visible_window_for_pid
-from modules.process_utils import launch_refsrv, wait_and_launch_refsrv
+from modules.process_utils import launch_refsrv, wait_and_launch_refsrv, launch_wincash
 from modules.reference_db import is_reference_db_name, reference_db_name, reference_db_path, supports_sqlite
 from modules.cloud_rk7man import cloud_rk7man_dialog
 from modules.shortcuts import create_task_shortcuts
@@ -74,7 +74,7 @@ from modules.feature_server import launch_feature_services, prepare_schrep_plugi
 from modules.feature_server import set_schrep_guid
 
 # ======================= Константы и настройки =======================
-SCRIPT_VERSION = "v2.10.0.0"  #Формат: vМajor.Minor.Patch.Build
+SCRIPT_VERSION = "v2.10.1.0"  #Формат: vМajor.Minor.Patch.Build
 AUTHOR = "Кирилл Рутенко"
 EMAIL = "k.rutenko@rkeeper.ru, xkiladx@gmail.com"
 DESCRIPTION = "Утилита для быстрой работы со стендами R-Keeper 7."
@@ -284,12 +284,16 @@ _forced_version = None
 
 # Открываем номер задачи в SD
 def open_task_in_sd():
-    task_id = task_id_var.get()
-    if task_id:
+    task_id = task_id_var.get().strip()
+    if task_id.isdigit():
         url = f'https://sd.rkeeper.ru/sd/operator/#esearch:full:serviceCall:ALL_OBJECTS!{{%22query%22:%22serviceCall@number:{task_id}%22}}'
         webbrowser.open(url)
     else:
-        centered_warning("Предупреждение", "Номер задачи не найден")
+        centered_warning(
+            "Предупреждение",
+            "Чтобы открыть задачу в SD, имя задачи должно состоять только из цифр "
+            "(номера тикета). В остальных случаях открыть задачу не получится."
+        )
 
 # ======================= Работа с INI-файлами (импортировано из modules.ini_utils) =======================
 
@@ -3719,7 +3723,16 @@ def start_wincash_only():
         centered_error("Ошибка", f"Файл не найден:\n{bat_path}")
         return
     try:
-        subprocess.Popen([bat_path], shell=True, cwd=ini_path)
+        launch_wincash(
+            ini_path,
+            on_restart_limit=lambda: root.after(
+                0,
+                centered_warning,
+                "WinCash",
+                "WinCash остановлен после 50 неудачных попыток запуска.\n"
+                "Сервер не найден. Проверьте работу MidServ и повторите запуск."
+            )
+        )
     except Exception as e:
         centered_error("Ошибка запуска", str(e))
 
